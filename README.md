@@ -14,24 +14,9 @@ Current defaults:
 - Pose/keypoints: `yolo26n-pose.pt`
 - Optional specialized activity model: `shoplifting.pt` when present
 
-The backend already includes:
+The backend currently includes FastAPI/WebSocket transport, reconnecting multi-camera RTSP workers, encrypted camera passwords, masked RTSP URLs, YOLO26 model configuration, upstream-compatible concealment heuristics, SQLite incident persistence, snapshot capture, SMTP alert plumbing, Docker bootstrap, and unit-test/CI scaffolding.
 
-- FastAPI API and WebSocket live-frame transport
-- multi-camera RTSP capture workers
-- automatic reconnect/backoff
-- encrypted RTSP password storage
-- masked RTSP URLs in API responses
-- YOLO26 detection and YOLO26 pose/tracking configuration
-- upstream-compatible object/hand/hip concealment heuristics
-- conservative `suspected_concealment` incident language
-- SQLite camera/incident persistence
-- incident snapshots and review status
-- SMTP email alert plumbing
-- Docker/Docker Compose bootstrap
-- unit tests for credential redaction
-- optional model-load smoke tests
-
-Incident video clips, authentication, the adapted Next.js dashboard, richer zone types, and model benchmarking are next.
+Incident video clips, authentication, the adapted Next.js dashboard, richer zone types, and live model qualification are the next major milestones.
 
 ## Quick development start
 
