@@ -31,7 +31,7 @@ function snapshotUrl(path?: string | null) {
 
 function clipUrl(path?: string | null) {
   const name = basename(path);
-  return name ? `${apiBase}/incidents/${encodeURIComponent(name)}` : null;
+  return name ? `${apiBase}/incident-media/${encodeURIComponent(name)}` : null;
 }
 
 export default function HistoryPage() {

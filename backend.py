@@ -774,7 +774,7 @@ def video_loop() -> None:
 
 app = FastAPI(title=APP_NAME, version="0.2.0")
 app.mount("/alerts", StaticFiles(directory=str(ALERT_DIR)), name="alerts")
-app.mount("/incidents", StaticFiles(directory=str(INCIDENT_DIR)), name="incidents")
+app.mount("/incident-media", StaticFiles(directory=str(INCIDENT_DIR)), name="incident-media")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
