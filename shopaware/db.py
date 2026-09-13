@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from shopaware.migrations import migrate
 
 
 def utc_now_iso() -> str:
@@ -20,6 +21,8 @@ class Database:
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     def init_schema(self) -> None:
@@ -58,6 +61,7 @@ class Database:
                 """
             )
             conn.commit()
+            migrate(conn)
         finally:
             conn.close()
 
@@ -165,16 +169,26 @@ class Database:
     def set_incident_clip(self, incident_id: str, clip_path: str) -> bool:
         conn = self.connect()
         try:
-            cur = conn.execute("UPDATE incidents SET clip_path = ? WHERE id = ?", (clip_path, incident_id))
+            cur = conn.execute("UPDATE incidents SET clip_path = ?, media_status='ready' WHERE id = ?", (clip_path, incident_id))
             conn.commit()
             return cur.rowcount > 0
         finally:
             conn.close()
 
-    def set_incident_review(self, incident_id: str, status: str) -> sqlite3.Row | None:
+    def set_media_status(self, incident_id: str, status: str) -> None:
         conn = self.connect()
         try:
-            cur = conn.execute("UPDATE incidents SET review_status = ? WHERE id = ?", (status, incident_id))
+            conn.execute('UPDATE incidents SET media_status=? WHERE id=?', (status, incident_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def set_incident_review(self, incident_id: str, status: str, reviewer: str | None = None, notes: str = '') -> sqlite3.Row | None:
+        if status not in {'needs_review', 'confirmed', 'false_alarm', 'dismissed'}:
+            raise ValueError('Invalid review status')
+        conn = self.connect()
+        try:
+            cur = conn.execute("UPDATE incidents SET review_status = ?, reviewer = ?, review_notes = ?, reviewed_at = ? WHERE id = ?", (status, reviewer, notes, utc_now_iso(), incident_id))
             conn.commit()
             if cur.rowcount == 0:
                 return None

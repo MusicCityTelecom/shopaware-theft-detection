@@ -116,3 +116,12 @@ def test_identical_person_in_second_camera_starts_independently():
     assert len(update(b, [person()]).boxes) == 0
     assert len(update(b, [person()]).boxes) == 1
     assert a.tracker.frame_id == 10
+
+
+def test_tensor_results_keep_tensor_contract_for_backend_consumers():
+    import torch
+    source = result([person()])
+    source.update(boxes=torch.as_tensor(source.boxes.data))
+    tracked = CameraTrackingContext().update(source, 1)
+    assert isinstance(tracked.boxes.data, torch.Tensor)
+    assert tracked.boxes.id.cpu().numpy().tolist() == [1]

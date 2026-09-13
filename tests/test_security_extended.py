@@ -16,7 +16,7 @@ def test_clean_ipv4_ipv6_credentials(url, clean):
 
 @pytest.mark.parametrize('url', ['file:///etc/passwd', 'rtsp:///live', 'rtsp://[bad/live',
     'rtsp://host:abc/live', 'rtsp://host:65536/live', 'rtsp://host:0/live',
-    'rtsp://host /live', 'rtsp://host/\nlive', 'rtsp://host/live#password'])
+    'rtsp://host /live', 'rtsp://host/\nlive', 'rtsp://host/live#password', 'rtsp://host/live?password=secret'])
 def test_malformed_url_rejected(url):
     with pytest.raises(ValueError):
         clean_camera_url(url)

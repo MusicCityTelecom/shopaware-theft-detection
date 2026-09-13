@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from urllib.parse import quote, unquote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -56,6 +56,8 @@ def clean_camera_url(url: str) -> str:
         raise ValueError("Camera URL uses an unsupported scheme")
     if parts.fragment:
         raise ValueError("Camera URL must not contain a fragment")
+    if any(key.lower() in {'password', 'passwd', 'pwd', 'token', 'auth'} for key, _ in parse_qsl(parts.query)):
+        raise ValueError("Camera credentials must be submitted separately from the URL")
     hostname = parts.hostname or ""
     if not hostname:
         raise ValueError("Camera URL must include a hostname or IP address")

@@ -16,8 +16,8 @@ class MediaWriter(Protocol):
 
 class OpenCVWriter:
     def __init__(self, codec: str = 'mp4v') -> None:
-        if len(codec) != 4:
-            raise ValueError('Codec must be four characters')
+        if codec not in {'mp4v', 'avc1', 'H264'}:
+            raise ValueError('Unsupported evidence codec')
         self.codec = codec
 
     def write(self, path: Path, frames: Sequence[Any], fps: float) -> None:

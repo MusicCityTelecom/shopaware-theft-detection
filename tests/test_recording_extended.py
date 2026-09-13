@@ -111,12 +111,18 @@ def test_identifiers_cannot_escape_media_directory(tmp_path, name):
         RollingClipRecorder(name, tmp_path)
 
 
-def test_invalid_writer_has_no_partial_media(tmp_path):
+def test_invalid_writer_has_no_partial_media(tmp_path, monkeypatch):
     errors = []
-    r = RollingClipRecorder('cam', tmp_path, media_writer=OpenCVWriter('zzzz'),
+    class UnavailableWriter:
+        def isOpened(self): return False
+        def release(self): pass
+    monkeypatch.setattr(cv2, 'VideoWriter', lambda *a: UnavailableWriter())
+    r = RollingClipRecorder('cam', tmp_path, media_writer=OpenCVWriter('avc1'),
                             on_error=lambda i, e: errors.append(e))
     r.push(frame(), 10)
     r.start_incident('one', 10)
     r.force_finalize_all()
     assert errors
     assert not list(tmp_path.glob('*.mp4'))
+    with pytest.raises(ValueError, match='Unsupported'):
+        OpenCVWriter('zzzz')

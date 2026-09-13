@@ -11,3 +11,4 @@ psutil
 pydantic
 python-multipart
 cryptography
+argon2-cffi>=25.1,<26

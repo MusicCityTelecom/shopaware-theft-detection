@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import torch
 from ultralytics.trackers.byte_tracker import BYTETracker, STrack
 
 
@@ -47,6 +48,7 @@ class PersonState:
     holding_hand: str | None = None
     last_holding_time: float = 0.0
     last_seen: float = 0.0
+    zone_entries: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -84,10 +86,13 @@ class CameraTrackingContext:
             tracks = self.tracker.update(result.boxes.cpu().numpy(), result.orig_img)
             if len(tracks):
                 selected = result[tracks[:, -1].astype(int)]
-                selected.update(boxes=tracks[:, :-1])
+                boxes = tracks[:, :-1]
             else:
                 selected = result[np.empty(0, dtype=int)]
-                selected.update(boxes=np.empty((0, 7), dtype=np.float32))
+                boxes = np.empty((0, 7), dtype=np.float32)
+            if isinstance(result.boxes.data, torch.Tensor):
+                boxes = torch.as_tensor(boxes, device=result.boxes.data.device)
+            selected.update(boxes=boxes)
             for track_id in list(self.people):
                 if now - self.people[track_id].last_seen > 60:
                     del self.people[track_id]
