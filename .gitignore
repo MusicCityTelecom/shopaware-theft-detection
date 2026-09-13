@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+
+# Runtime data
+shopaware.db
+theft_detection.db
+alerts/
+incidents/
+cameras.json
+settings.json
+error_log.txt
+models/*.pt
+*.pt
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+dashboard/.env.local
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

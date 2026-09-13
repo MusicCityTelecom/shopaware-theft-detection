@@ -1,0 +1,13 @@
+services:
+  shopaware:
+    build: .
+    container_name: shopaware
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./alerts:/app/alerts
+      - ./models:/app/models

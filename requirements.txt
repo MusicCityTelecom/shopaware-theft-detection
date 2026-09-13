@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+websockets
+opencv-python
+ultralytics
+numpy
+lapx
+requests
+python-dotenv
+psutil
+pydantic
+python-multipart
+cryptography
