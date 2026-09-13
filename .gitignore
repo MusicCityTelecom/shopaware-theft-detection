@@ -12,8 +12,8 @@ env/
 data/
 shopaware.db
 theft_detection.db
-alerts/
-incidents/
+/alerts/
+/incidents/
 cameras.json
 settings.json
 error_log.txt
@@ -40,6 +40,7 @@ Thumbs.db
 # Local qualification output
 .research/
 .pnpm-store/
+Ultralytics/
 *-install.log
 *-tests.log
 *-build.log
