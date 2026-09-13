@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -12,6 +13,24 @@ import cv2
 import numpy as np
 
 from shopaware.training import COCO_NAMES
+
+
+@contextmanager
+def local_training_callbacks():
+    """Suppress optional logger/upload callbacks in the standalone training process.
+
+    Pinned Ultralytics 8.4.150 registers trainer/validator integrations here.
+    Logger settings alone do not disable Platform checkpoint uploads. Preserve
+    core callbacks and restore the factory without modifying saved settings or
+    account credentials. This helper is for the separate, single training CLI.
+    """
+    from ultralytics.utils import callbacks
+    original = callbacks.add_integration_callbacks
+    callbacks.add_integration_callbacks = lambda instance: None
+    try:
+        yield
+    finally:
+        callbacks.add_integration_callbacks = original
 
 
 def check_dataset(data_file: Path) -> dict:
@@ -86,6 +105,11 @@ def main():
     print(json.dumps(report, indent=2))
     if args.check_only:
         return
+    with local_training_callbacks():
+        run_training(args, report)
+
+
+def run_training(args, report):
     from ultralytics import YOLO
     name = f'camera-{uuid.uuid4().hex[:12]}'
     model = YOLO('yolo26n.pt')

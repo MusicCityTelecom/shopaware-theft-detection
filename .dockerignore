@@ -10,6 +10,7 @@ dashboard/.next
 *.db-wal
 *.db-shm
 training-data
+shopaware-camera-dataset*.zip
 runs
 *.key
 *.pt

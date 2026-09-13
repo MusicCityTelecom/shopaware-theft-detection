@@ -21,6 +21,7 @@ error_log.txt
 
 # Model artifacts
 /training-data/
+shopaware-camera-dataset*.zip
 /runs/
 *.db-wal
 *.db-shm

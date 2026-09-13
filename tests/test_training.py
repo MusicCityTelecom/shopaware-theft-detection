@@ -163,6 +163,8 @@ def test_training_command_preflight_and_separate_test_run(store, tmp_path, monke
     from tools.train_camera import main
     path, _ = exported(store, tmp_path)
     calls = []
+    integration_calls = []
+    callbacks = SimpleNamespace(add_integration_callbacks=lambda instance: integration_calls.append(instance))
     checkpoint = tmp_path / 'run/weights/best.pt'
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_bytes(b'synthetic mocked checkpoint')
@@ -172,15 +174,19 @@ def test_training_command_preflight_and_separate_test_run(store, tmp_path, monke
         names = dict(enumerate(COCO_NAMES))
         def __init__(self, source): calls.append(('load', source))
         def train(self, **kwargs):
+            callbacks.add_integration_callbacks(self)
             calls.append(('train', kwargs))
             self.trainer = SimpleNamespace(best=checkpoint)
         def val(self, **kwargs):
+            callbacks.add_integration_callbacks(self)
             calls.append(('val', kwargs))
             return SimpleNamespace(results_dict={'metrics/precision(B)': .5})
 
     monkeypatch.setitem(sys.modules, 'ultralytics', SimpleNamespace(YOLO=Model))
+    monkeypatch.setitem(sys.modules, 'ultralytics.utils', SimpleNamespace(callbacks=callbacks))
     monkeypatch.setattr(sys, 'argv', ['train_camera', '--data', str(path), '--output', str(tmp_path / 'runs')] + (['--check-only'] if check_only else []))
     main()
+    assert not integration_calls
     if check_only:
         assert not calls
         assert not (checkpoint.parent.parent / 'shopaware-report.json').exists()
@@ -191,3 +197,29 @@ def test_training_command_preflight_and_separate_test_run(store, tmp_path, monke
         assert calls[-1][1]['split'] == 'test'
         report = json.loads((checkpoint.parent.parent / 'shopaware-report.json').read_text())
         assert report['activated'] is False and report['quality_qualified'] is False
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_local_training_suppresses_integrations_and_restores_factory(monkeypatch, fail):
+    from ultralytics.utils import callbacks
+    from tools.train_camera import local_training_callbacks
+    calls = []
+    original = lambda instance: calls.append(instance)
+    monkeypatch.setattr(callbacks, 'add_integration_callbacks', original)
+    try:
+        with local_training_callbacks():
+            callbacks.add_integration_callbacks('must-not-upload')
+            assert callbacks.get_default_callbacks()['on_train_start']
+            if fail:
+                raise RuntimeError('Synthetic training failure')
+    except RuntimeError:
+        assert fail
+    assert not calls and callbacks.add_integration_callbacks is original
+
+
+def test_pinned_trainer_and_validator_use_guarded_integration_factory():
+    import inspect
+    from ultralytics.engine.trainer import BaseTrainer
+    from ultralytics.engine.validator import BaseValidator
+    assert 'callbacks.add_integration_callbacks(self)' in inspect.getsource(BaseTrainer)
+    assert 'callbacks.add_integration_callbacks(self)' in inspect.getsource(BaseValidator)
