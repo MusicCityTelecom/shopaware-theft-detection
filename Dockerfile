@@ -15,10 +15,12 @@ COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY backend.py ./
-RUN mkdir -p /app/alerts /app/models /app/data
+COPY shopaware ./shopaware
+RUN mkdir -p /app/alerts /app/incidents /app/models /app/data
 
 ENV SHOPAWARE_DB_PATH=/app/data/shopaware.db \
     SHOPAWARE_ALERT_DIR=/app/alerts \
+    SHOPAWARE_INCIDENT_DIR=/app/incidents \
     SHOPAWARE_KEY_FILE=/app/data/.shopaware.key
 
 EXPOSE 8000

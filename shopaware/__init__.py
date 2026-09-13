@@ -1,0 +1,1 @@
+"""ShopAware application modules."""

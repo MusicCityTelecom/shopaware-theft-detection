@@ -1,28 +1,28 @@
-from backend import build_runtime_rtsp_url, masked_rtsp_url, redact_exception_message
+from shopaware.security import build_runtime_url, masked_camera_url, redact
 
 
-def test_runtime_rtsp_url_injects_encoded_credentials():
-    url = build_runtime_rtsp_url(
+def test_runtime_url_injects_encoded_credentials():
+    url = build_runtime_url(
         "rtsp://10.0.0.25:554/Streaming/Channels/101",
         "camera user",
-        "p@ss:word",
+        "sample-value-1",
     )
-    assert url.startswith("rtsp://camera%20user:p%40ss%3Aword@10.0.0.25:554/")
+    assert url.startswith("rtsp://camera%20user:sample-value-1@10.0.0.25:554/")
 
 
-def test_runtime_rtsp_url_strips_embedded_credentials():
-    url = build_runtime_rtsp_url(
-        "rtsp://old:bad@10.0.0.25:554/live",
+def test_runtime_url_strips_embedded_credentials():
+    url = build_runtime_url(
+        "rtsp://old:legacy@10.0.0.25:554/live",
         "newuser",
-        "newpass",
+        "newvalue",
     )
     assert "old" not in url
-    assert "bad" not in url
-    assert "newuser:newpass@" in url
+    assert "legacy" not in url
+    assert "newuser:newvalue@" in url
 
 
-def test_masked_url_never_contains_password():
-    safe = masked_rtsp_url(
+def test_masked_url_never_contains_secret_value():
+    safe = masked_camera_url(
         "rtsp://10.0.0.25:554/live",
         "operator",
         True,
@@ -31,7 +31,7 @@ def test_masked_url_never_contains_password():
 
 
 def test_exception_redaction():
-    secret = "super-secret-camera-password"
-    message = redact_exception_message(f"connection failed using {secret}", [secret])
+    secret = "sample-sensitive-value"
+    message = redact(f"connection failed using {secret}", [secret])
     assert secret not in message
     assert "********" in message

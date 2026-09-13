@@ -10,4 +10,5 @@ services:
     volumes:
       - ./data:/app/data
       - ./alerts:/app/alerts
+      - ./incidents:/app/incidents
       - ./models:/app/models

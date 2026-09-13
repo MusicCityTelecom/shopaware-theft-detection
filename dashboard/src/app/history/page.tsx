@@ -19,10 +19,19 @@ type Incident = {
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
-function snapshotUrl(path?: string | null) {
+function basename(path?: string | null) {
   if (!path) return null;
-  const name = path.split(/[\\/]/).pop();
+  return path.split(/[\\/]/).pop() || null;
+}
+
+function snapshotUrl(path?: string | null) {
+  const name = basename(path);
   return name ? `${apiBase}/alerts/${encodeURIComponent(name)}` : null;
+}
+
+function clipUrl(path?: string | null) {
+  const name = basename(path);
+  return name ? `${apiBase}/incidents/${encodeURIComponent(name)}` : null;
 }
 
 export default function HistoryPage() {
@@ -70,7 +79,7 @@ export default function HistoryPage() {
       <header className="mb-8 flex flex-wrap justify-between gap-4 items-end">
         <div>
           <h2 className="text-3xl font-bold tracking-tight mb-2">Incidents</h2>
-          <p className="text-foreground/60">Review AI-generated candidates and mark the outcome.</p>
+          <p className="text-foreground/60">Review AI-generated candidates, snapshots, and pre/post-event evidence clips.</p>
         </div>
         <div className="flex gap-2">
           <select className="input w-auto" value={filter} onChange={(e) => setFilter(e.target.value)}>
@@ -95,14 +104,27 @@ export default function HistoryPage() {
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {visible.map((incident) => {
             const image = snapshotUrl(incident.snapshot_path);
+            const video = clipUrl(incident.clip_path);
             return (
               <article key={incident.id} className="glass-panel overflow-hidden">
-                {image && (
+                {video ? (
+                  <div className="bg-black aspect-video">
+                    <video
+                      src={video}
+                      controls
+                      preload="metadata"
+                      className="w-full h-full object-contain"
+                    >
+                      Your browser does not support embedded incident video.
+                    </video>
+                  </div>
+                ) : image ? (
                   <div className="bg-black aspect-video">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={image} alt={`Incident from ${incident.camera_name}`} className="w-full h-full object-contain" />
                   </div>
-                )}
+                ) : null}
+
                 <div className="p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <div>
@@ -114,13 +136,14 @@ export default function HistoryPage() {
                       <span className="badge">{incident.review_status.replaceAll("_", " ")}</span>
                     </div>
                   </div>
+
                   <div className="text-sm font-medium text-brand mb-1">{incident.event_type.replaceAll("_", " ")}</div>
                   <p className="text-sm text-foreground/65 leading-6 mb-4">{incident.message}</p>
 
                   {incident.clip_path ? (
-                    <div className="text-xs text-green-300 mb-3">Evidence clip recorded.</div>
+                    <div className="text-xs text-green-300 mb-3">Pre/post-event evidence clip ready.</div>
                   ) : (
-                    <div className="text-xs text-foreground/40 mb-3">Snapshot only — pre/post event video recorder is still pending.</div>
+                    <div className="text-xs text-amber-300/80 mb-3">Evidence clip is still recording/finalizing, or clip creation failed.</div>
                   )}
 
                   <div className="flex flex-wrap gap-2">
