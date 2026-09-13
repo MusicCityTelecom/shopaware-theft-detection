@@ -1,7 +1,10 @@
 "use client";
 
+import { apiBase, apiFetch as fetch } from "@/lib/api";
+
 import { useEffect, useState } from "react";
 import { Cpu, Mail, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import SettingsForm from "@/components/SettingsForm";
 
 type Health = {
   status: string;
@@ -13,7 +16,7 @@ type Health = {
   camera_count: number;
 };
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 
 export default function SettingsPage() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -71,14 +74,14 @@ export default function SettingsPage() {
         <section className="glass-panel p-5">
           <div className="flex items-center gap-2 mb-4"><SlidersHorizontal className="w-5 h-5 text-brand" /><h3 className="font-semibold">Pending controls</h3></div>
           <ul className="text-sm text-foreground/65 space-y-2 list-disc pl-5">
-            <li>per-camera inference FPS and confidence thresholds</li>
-            <li>merchandise / checkout / exit / restricted zone types</li>
-            <li>incident clip duration and retention</li>
-            <li>application users and roles</li>
+            <li>per-camera overrides for global inference settings</li>
+            <li>additional operator roles beyond administrator</li>
             <li>SMS alert provider</li>
           </ul>
         </section>
       </div>
+
+      <SettingsForm />
 
       {health?.model_error && (
         <div className="glass-panel border-amber-500/25 text-amber-200 p-4 mt-5 text-sm">

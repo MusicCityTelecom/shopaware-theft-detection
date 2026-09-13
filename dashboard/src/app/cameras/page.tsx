@@ -1,7 +1,10 @@
 "use client";
 
+import { apiBase, apiFetch as fetch } from "@/lib/api";
+
 import { FormEvent, useEffect, useState } from "react";
 import { Camera, Plus, RefreshCw, Trash2 } from "lucide-react";
+import ZoneEditor from "@/components/ZoneEditor";
 
 type CameraRow = {
   id: string;
@@ -11,10 +14,12 @@ type CameraRow = {
   has_password: boolean;
   source: string;
   status: string;
+  enabled: boolean;
+  last_frame_at?: number;
   roi_points: number[][];
 };
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 
 export default function CamerasPage() {
   const [cameras, setCameras] = useState<CameraRow[]>([]);
@@ -25,6 +30,20 @@ export default function CamerasPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [zoneCamera, setZoneCamera] = useState<string | null>(null);
+
+  const cameraAction = async (camera: CameraRow, action: "enabled" | "test") => {
+    try {
+      const response = await fetch(`${apiBase}/cameras/${camera.id}/${action}`, {
+        method: action === "test" ? "POST" : "PUT", headers: { "Content-Type": "application/json" },
+        ...(action === "enabled" ? { body: JSON.stringify({ enabled: !camera.enabled }) } : {}),
+      });
+      if (!response.ok) throw new Error("Camera action failed");
+      const result = await response.json();
+      setMessage(action === "test" ? (result.connected ? "Connection test received a frame." : "Connection test did not receive a frame.") : "Camera state updated.");
+      await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Camera action failed"); }
+  };
 
   const refresh = async () => {
     try {
@@ -38,9 +57,9 @@ export default function CamerasPage() {
   };
 
   useEffect(() => {
-    refresh();
+    const initial = setTimeout(refresh, 0);
     const timer = setInterval(refresh, 8000);
-    return () => clearInterval(timer);
+    return () => { clearTimeout(initial); clearInterval(timer); };
   }, []);
 
   const submit = async (event: FormEvent) => {
@@ -138,6 +157,13 @@ export default function CamerasPage() {
                     <div className="text-xs text-foreground/40 mt-2">
                       User: {camera.username || "none"} · Password: {camera.has_password ? "stored/encrypted" : "none"} · ROI points: {camera.roi_points?.length || 0}
                     </div>
+                    <p className="text-xs mt-2">Last frame: {camera.last_frame_at ? new Date(camera.last_frame_at * 1000).toLocaleString() : "None"}</p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <button className="btn btn-secondary" onClick={() => cameraAction(camera, "enabled")}>{camera.enabled ? "Disable" : "Enable"}</button>
+                      <button className="btn btn-secondary" onClick={() => cameraAction(camera, "test")}>Test connection</button>
+                      <button className="btn btn-secondary" onClick={() => setZoneCamera(zoneCamera === camera.id ? null : camera.id)}>Zones</button>
+                    </div>
+                    {zoneCamera === camera.id && <ZoneEditor cameraId={camera.id} />}
                   </div>
                   <button className="btn btn-danger shrink-0" onClick={() => remove(camera)} title="Delete camera"><Trash2 className="w-4 h-4" /></button>
                 </article>

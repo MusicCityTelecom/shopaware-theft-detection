@@ -1,5 +1,7 @@
 "use client";
 
+import { apiBase, apiFetch as fetch } from "@/lib/api";
+
 import { useEffect, useState } from "react";
 import { Activity, Camera, Cpu, ShieldAlert } from "lucide-react";
 import CameraGrid from "@/components/CameraGrid";
@@ -12,9 +14,12 @@ type Health = {
   pose_model: string;
   specialized_loaded: boolean;
   camera_count: number;
+  incident_counts?: Record<string, number>;
+  telemetry?: { system_cpu_percent: number; process_rss_bytes: number; cuda_available: boolean };
+  storage?: { bytes_used?: number; max_bytes?: number; quota_exceeded?: boolean };
 };
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 
 export default function Home() {
   const [cameraCount, setCameraCount] = useState("0/0");
@@ -37,7 +42,7 @@ export default function Home() {
         const h: Health = await healthRes.json();
         const active = cameras.filter((c) => c.status === "active").length;
         setCameraCount(`${active}/${cameras.length}`);
-        setOpenIncidents(incidents.filter((i) => i.review_status === "needs_review").length);
+        setOpenIncidents(h.incident_counts?.needs_review ?? incidents.filter((i) => i.review_status === "needs_review").length);
         setHealth(h);
         setApiError("");
       } catch (error) {
@@ -55,6 +60,10 @@ export default function Home() {
     { label: "Needs Review", value: String(openIncidents), icon: ShieldAlert, detail: "incident candidates" },
     { label: "Detector", value: health?.detection_model || "—", icon: Cpu, detail: health?.specialized_loaded ? "specialized model active" : "generic detector" },
     { label: "Backend", value: health?.status || "offline", icon: Activity, detail: health?.pose_model || "pose model unavailable" },
+    { label: "CPU", value: health?.telemetry ? `${health.telemetry.system_cpu_percent.toFixed(1)}%` : "—", icon: Cpu, detail: "sampled system CPU" },
+    { label: "Memory", value: health?.telemetry ? `${Math.round(health.telemetry.process_rss_bytes / 1024 ** 2)} MiB` : "—", icon: Activity, detail: "backend resident memory" },
+    { label: "Media", value: health?.storage?.bytes_used !== undefined ? `${(health.storage.bytes_used / 1024 ** 3).toFixed(2)} GiB` : "—", icon: ShieldAlert, detail: health?.storage?.quota_exceeded ? "quota exceeded" : "retention-managed storage" },
+    { label: "CUDA", value: health?.telemetry ? (health.telemetry.cuda_available ? "Available" : "Unavailable") : "—", icon: Cpu, detail: "runtime availability; not qualification" },
   ];
 
   return (

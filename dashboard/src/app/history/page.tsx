@@ -1,5 +1,7 @@
 "use client";
 
+import { apiBase, apiFetch as fetch } from "@/lib/api";
+
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 
@@ -14,30 +16,18 @@ type Incident = {
   snapshot_path?: string | null;
   clip_path?: string | null;
   review_status: string;
+  reviewer?: string | null;
+  review_notes?: string;
   metadata?: Record<string, unknown>;
 };
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
-function basename(path?: string | null) {
-  if (!path) return null;
-  return path.split(/[\\/]/).pop() || null;
-}
-
-function snapshotUrl(path?: string | null) {
-  const name = basename(path);
-  return name ? `${apiBase}/alerts/${encodeURIComponent(name)}` : null;
-}
-
-function clipUrl(path?: string | null) {
-  const name = basename(path);
-  return name ? `${apiBase}/incident-media/${encodeURIComponent(name)}` : null;
-}
 
 export default function HistoryPage() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [filter, setFilter] = useState("needs_review");
   const [error, setError] = useState("");
+  const [notes, setNotes] = useState<Record<string, string>>({});
 
   const refresh = async () => {
     try {
@@ -51,9 +41,9 @@ export default function HistoryPage() {
   };
 
   useEffect(() => {
-    refresh();
+    const initial = setTimeout(refresh, 0);
     const timer = setInterval(refresh, 10000);
-    return () => clearInterval(timer);
+    return () => { clearTimeout(initial); clearInterval(timer); };
   }, []);
 
   const visible = useMemo(
@@ -65,7 +55,7 @@ export default function HistoryPage() {
     const response = await fetch(`${apiBase}/incidents/${id}/review`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, notes: notes[id] ?? incidents.find(i => i.id === id)?.review_notes ?? "" }),
     });
     if (!response.ok) {
       setError(`Unable to update incident ${id.slice(0, 8)}`);
@@ -103,8 +93,8 @@ export default function HistoryPage() {
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {visible.map((incident) => {
-            const image = snapshotUrl(incident.snapshot_path);
-            const video = clipUrl(incident.clip_path);
+            const image = incident.snapshot_path ? `${apiBase}/incidents/${incident.id}/media/snapshot` : null;
+            const video = incident.clip_path ? `${apiBase}/incidents/${incident.id}/media/clip` : null;
             return (
               <article key={incident.id} className="glass-panel overflow-hidden">
                 {video ? (
@@ -132,13 +122,16 @@ export default function HistoryPage() {
                       <div className="text-xs text-foreground/45">{new Date(incident.created_at).toLocaleString()}</div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="badge text-amber-300">{Math.round(incident.risk_score * 100)}% risk</span>
+                      <span className="badge text-amber-300">Heuristic risk {Math.round(incident.risk_score * 100)}/100</span>
                       <span className="badge">{incident.review_status.replaceAll("_", " ")}</span>
                     </div>
                   </div>
 
                   <div className="text-sm font-medium text-brand mb-1">{incident.event_type.replaceAll("_", " ")}</div>
                   <p className="text-sm text-foreground/65 leading-6 mb-4">{incident.message}</p>
+                  <p className="text-xs mb-3">Signals: {Array.isArray(incident.metadata?.signals) ? incident.metadata.signals.join(", ") : "Legacy incident"}</p>
+                  <p className="text-xs mb-3">Reviewer: {incident.reviewer || "Awaiting review"}</p>
+                  <label className="text-sm block mb-3">Review notes<textarea className="input mt-1" maxLength={4000} value={notes[incident.id] ?? incident.review_notes ?? ""} onChange={e => setNotes({ ...notes, [incident.id]: e.target.value })} /></label>
 
                   {incident.clip_path ? (
                     <div className="text-xs text-green-300 mb-3">Pre/post-event evidence clip ready.</div>

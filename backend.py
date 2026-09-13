@@ -5,9 +5,11 @@ import base64
 import json
 import os
 import smtplib
+import secrets as token_secrets
 import threading
 import time
 import uuid
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from email.mime.image import MIMEImage
@@ -17,19 +19,32 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+# Suppress native codec diagnostics that can include credential-bearing URIs.
+os.environ.setdefault('OPENCV_LOG_LEVEL', 'SILENT')
+os.environ.setdefault('OPENCV_FFMPEG_LOGLEVEL', '-8')
+
 import cv2
 import numpy as np
+import psutil
+import torch
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Request, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 from ultralytics import YOLO
 
 from shopaware.ingest import ThreadedCamera
 from shopaware.tracking import CameraTrackingContext
+from shopaware.alerts.base import AlertEvent, AlertDispatcher
+from shopaware.alerts.smtp import SMTPProvider
+from shopaware.settings import SettingsStore, SettingsInput
+from shopaware.storage import RetentionManager
+from shopaware.zones import Zone
+from shopaware.risk import RiskEngine
+from shopaware.auth import AuthService, COOKIE
 from shopaware.db import Database
 from shopaware.recording import RollingClipRecorder
 from shopaware.security import (
@@ -40,7 +55,13 @@ from shopaware.security import (
     redact,
 )
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logger = logging.getLogger('shopaware.backend')
+
 load_dotenv()
+
+settings_store = SettingsStore(Database(Path(os.getenv('SHOPAWARE_DB_PATH', 'shopaware.db'))), SecretStore())
+settings_store.load_environment()
 
 APP_NAME = "ShopAware"
 DB_PATH = Path(os.getenv("SHOPAWARE_DB_PATH", "shopaware.db"))
@@ -75,6 +96,8 @@ CORS_ORIGINS = [
 
 database = Database(DB_PATH)
 secrets = SecretStore()
+auth = AuthService(database)
+COOKIE_SECURE = os.getenv("SHOPAWARE_COOKIE_SECURE", "true").lower() == "true"
 
 
 class CameraInput(BaseModel):
@@ -96,6 +119,7 @@ class RoiInput(BaseModel):
 
 class ReviewInput(BaseModel):
     status: str
+    notes: str = Field(default="", max_length=4000)
 
     @model_validator(mode="after")
     def validate_status(self) -> "ReviewInput":
@@ -107,13 +131,23 @@ class ReviewInput(BaseModel):
 
 def on_clip_complete(incident_id: str, path: Path) -> None:
     if database.set_incident_clip(incident_id, str(path)):
-        print(f"Incident clip ready: {incident_id} -> {path.name}")
+        logger.info(f"Incident clip ready: {incident_id} -> {path.name}")
     else:
-        print(f"Incident clip completed for unknown incident: {incident_id}")
+        logger.warning(f"Incident clip completed for unknown incident: {incident_id}")
 
 
 def on_clip_error(incident_id: str, exc: Exception) -> None:
-    print(f"Incident clip failed for {incident_id}: {redact(str(exc))}")
+    database.set_media_status(incident_id, "failed")
+    logger.error(f"Incident clip failed for {incident_id}: {redact(str(exc))}")
+
+
+def load_zones(camera_id: str) -> list[Zone]:
+    conn = database.connect()
+    try:
+        rows = conn.execute('SELECT * FROM zones WHERE camera_id=?', (camera_id,)).fetchall()
+        return [Zone(id=r['id'], name=r['name'], type=r['type'], points=json.loads(r['points_json']), enabled=bool(r['enabled'])) for r in rows]
+    finally:
+        conn.close()
 
 
 class CameraManager:
@@ -150,6 +184,8 @@ class CameraManager:
             "runtime_url": runtime_url,
             "recorder": recorder,
             "tracking": CameraTrackingContext(),
+            "risk": RiskEngine(threshold=float(os.getenv("SHOPAWARE_RISK_THRESHOLD", "65"))),
+            "zones": load_zones(row["id"]),
             "last_inference_at": 0.0,
             "last_sequence": -1,
             "inference_fps": float(os.getenv("SHOPAWARE_INFERENCE_FPS", "5")),
@@ -164,7 +200,7 @@ class CameraManager:
                 try:
                     self.cameras[row["id"]] = self._row_to_runtime(row)
                 except Exception as exc:
-                    print(f"Camera {row['id']} could not be initialized: {redact(str(exc))}")
+                    raise RuntimeError(f"Camera {row['id']} could not be initialized; check credential key and configuration") from None
 
     def add_camera(self, camera: CameraInput) -> str:
         camera_id = str(uuid.uuid4())
@@ -261,6 +297,7 @@ class CameraManager:
 
 
 camera_manager = CameraManager()
+camera_lifecycle_lock = threading.RLock()
 latest_frame: dict[str, Any] | None = None
 latest_frame_lock = threading.Lock()
 models_lock = threading.Lock()
@@ -338,7 +375,8 @@ def trigger_incident(
     incident_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
     filename = ALERT_DIR / f"incident_{camera_id}_{timestamp}.jpg"
-    cv2.imwrite(str(filename), frame)
+    if not cv2.imwrite(str(filename), frame):
+        raise RuntimeError("Incident snapshot could not be written")
 
     database.insert_incident(
         incident_id=incident_id,
@@ -348,64 +386,27 @@ def trigger_incident(
         message=message,
         risk_score=risk_score,
         snapshot_path=str(filename),
-        metadata=metadata,
+        metadata={"trigger_at": trigger_at, **(metadata or {})},
     )
 
-    camera_manager.start_recording(camera_id, incident_id, trigger_at)
+    if not camera_manager.start_recording(camera_id, incident_id, trigger_at):
+        database.set_media_status(incident_id, "unavailable")
 
-    threading.Thread(
-        target=send_email_notification,
-        args=(camera_name, event_type, message, risk_score, filename),
-        daemon=True,
-    ).start()
+    if not alert_dispatcher.enqueue(AlertEvent(incident_id, camera_name, event_type, message, risk_score, filename)):
+        set_alert_status(incident_id, 'queue_full')
     return incident_id
 
 
-def send_email_notification(
-    camera_name: str,
-    event_type: str,
-    message: str,
-    risk_score: float,
-    image_path: Path,
-) -> None:
-    host = os.getenv("SMTP_HOST", "").strip()
-    username = os.getenv("SMTP_USERNAME", "").strip()
-    password = os.getenv("SMTP_PASSWORD", "")
-    sender = os.getenv("SMTP_FROM", username).strip()
-    recipient = os.getenv("SMTP_TO", "").strip()
-    if not all([host, sender, recipient]):
-        return
-
-    port = int(os.getenv("SMTP_PORT", "587"))
-    msg = MIMEMultipart()
-    msg["From"] = sender
-    msg["To"] = recipient
-    msg["Subject"] = f"ShopAware alert: {event_type} on {camera_name}"
-    body = (
-        "ShopAware detected an event requiring review.\n\n"
-        f"Camera: {camera_name}\n"
-        f"Event: {event_type}\n"
-        f"Risk score: {risk_score:.0%}\n"
-        f"Details: {message}\n\n"
-        f"Evidence video is recording for approximately {POST_EVENT_SECONDS:.0f} seconds after the trigger.\n"
-        "This is an automated candidate detection, not proof of theft. Human review is required."
-    )
-    msg.attach(MIMEText(body, "plain"))
-
+def set_alert_status(incident_id: str, status: str) -> None:
+    conn = database.connect()
     try:
-        with image_path.open("rb") as fh:
-            msg.attach(MIMEImage(fh.read(), name=image_path.name))
-    except OSError:
-        pass
+        conn.execute('UPDATE incidents SET alert_status=? WHERE id=?', (status, incident_id))
+        conn.commit()
+    finally:
+        conn.close()
 
-    try:
-        with smtplib.SMTP(host, port, timeout=20) as server:
-            server.starttls()
-            if username:
-                server.login(username, password)
-            server.send_message(msg)
-    except Exception as exc:
-        print(f"Email notification failed: {redact(str(exc), [password])}")
+
+alert_dispatcher = AlertDispatcher(SMTPProvider(), set_alert_status)
 
 
 def load_models() -> None:
@@ -414,16 +415,16 @@ def load_models() -> None:
         if model_pose is not None:
             return
         try:
-            print(f"Loading ShopAware pose model: {POSE_MODEL}")
+            logger.info(f"Loading ShopAware pose model: {redact(POSE_MODEL)}")
             model_pose = YOLO(POSE_MODEL)
 
             model_is_specialized = False
             if ENABLE_SPECIALIZED_MODEL and Path(SPECIALIZED_MODEL).exists():
-                print(f"Loading specialized activity model: {SPECIALIZED_MODEL}")
+                logger.info(f"Loading specialized activity model: {redact(SPECIALIZED_MODEL)}")
                 model_obj = YOLO(SPECIALIZED_MODEL)
                 model_is_specialized = True
             else:
-                print(f"Loading ShopAware detection model: {DETECTION_MODEL}")
+                logger.info(f"Loading ShopAware detection model: {redact(DETECTION_MODEL)}")
                 model_obj = YOLO(DETECTION_MODEL)
             model_load_error = ""
         except Exception as exc:
@@ -448,6 +449,7 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
             context.reset(generation, resolution)
             cam["roi_entry_times"].clear()
             cam["last_objects"] = []
+            cam["risk"] = RiskEngine(threshold=float(os.getenv("SHOPAWARE_RISK_THRESHOLD", "65")))
         # Preserve original evidence before annotations are drawn.
         # Evidence is sampled by capture before inference/annotations.
         now = captured_at
@@ -455,13 +457,18 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
         assert model_pose is not None
         assert model_obj is not None
 
-        pose_results = model_pose.predict(frame, verbose=False, classes=[0], conf=0.1)
+        inference_frame = frame.copy()
+        for zone in cam['zones']:
+            if zone.enabled and zone.type == 'ignore':
+                polygon = np.array([(x * frame.shape[1], y * frame.shape[0]) for x, y in zone.points], dtype=np.int32)
+                cv2.fillPoly(inference_frame, [polygon], (0, 0, 0))
+        pose_results = model_pose.predict(inference_frame, verbose=False, classes=[0], conf=0.1)
         pose_results = [context.update(pose_results[0], now)]
         detected_objects: list[np.ndarray] = cam.get("last_objects", [])
 
         if run_obj:
             detected_objects = []
-            obj_results = model_obj(frame, verbose=False, conf=0.30)
+            obj_results = model_obj(inference_frame, verbose=False, conf=0.30)
             if obj_results:
                 boxes = obj_results[0].boxes.xyxy.cpu().numpy().astype(int)
                 classes = obj_results[0].boxes.cls.cpu().numpy().astype(int)
@@ -481,16 +488,18 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                                 (0, 0, 255),
                                 2,
                             )
-                            if now - cam["last_alert_time"] > ALERT_COOLDOWN:
+                            candidate = cam['risk'].observe(-1, ['specialized_model_activity'], now)
+                            if candidate:
                                 trigger_incident(
                                     camera_id,
                                     cam["name"],
                                     "specialized_model_candidate",
                                     f"Specialized activity model produced class '{class_name}'.",
-                                    float(confidence),
+                                    candidate["risk_score"],
                                     frame,
                                     now,
                                     {
+                                        **candidate["metadata"],
                                         "class_name": class_name,
                                         "confidence": float(confidence),
                                     },
@@ -534,7 +543,34 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                     if len(keypoints_all) > idx
                     else np.empty((0, 2))
                 )
+                if pose_results[0].keypoints is not None and pose_results[0].keypoints.conf is not None:
+                    confidence = pose_results[0].keypoints.conf[idx].cpu().numpy()
+                    keypoints = keypoints.copy()
+                    keypoints[confidence < 0.5] = 0
                 state = context.person(int(track_id), now)
+                point = (float((box[0] + box[2]) / 2 / frame.shape[1]), float(box[3] / frame.shape[0]))
+                if any(z.type == 'ignore' and z.contains(point) for z in cam['zones']):
+                    continue
+                zone_signals = []
+                occupied = set()
+                for zone in cam['zones']:
+                    if zone.contains(point):
+                        occupied.add(zone.id)
+                        if zone.id not in state.zone_entries:
+                            state.zone_entries[zone.id] = now
+                            zone_signals.append({'merchandise': 'merchandise_zone_entry',
+                                'checkout': 'checkout_zone_entry', 'exit': 'exit_zone_entry'}.get(zone.type, ''))
+                        elif now - state.zone_entries[zone.id] >= LOITERING_THRESHOLD:
+                            zone_signals.append('excessive_dwell')
+                    if zone.enabled and zone.type in {'merchandise', 'restricted'}:
+                        for wrist in keypoints[9:11]:
+                            if wrist[0] > 0 and wrist[1] > 0 and zone.contains((float(wrist[0]/frame.shape[1]),float(wrist[1]/frame.shape[0]))):
+                                zone_signals.append('merchandise_interaction' if zone.type == 'merchandise' else 'restricted_zone_interaction')
+                state.zone_entries = {key: at for key,at in state.zone_entries.items() if key in occupied}
+                zone_candidate = cam['risk'].observe(int(track_id), [v for v in zone_signals if v], now)
+                if zone_candidate:
+                    trigger_incident(camera_id, cam['name'], zone_candidate['event_type'],
+                        'Multiple activity signals require human review.', zone_candidate['risk_score'], frame, now, zone_candidate['metadata'])
 
                 left_has_obj = check_object_in_hand(keypoints, detected_objects, "LEFT")
                 right_has_obj = check_object_in_hand(keypoints, detected_objects, "RIGHT")
@@ -542,6 +578,10 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                 holding_hand = "LEFT" if left_has_obj else "RIGHT" if right_has_obj else None
 
                 if current_holding:
+                    hand_candidate = cam["risk"].observe(int(track_id), ["object_near_hand"], now)
+                    if hand_candidate:
+                        trigger_incident(camera_id, cam['name'], hand_candidate['event_type'],
+                            'Multiple activity signals require human review.', hand_candidate['risk_score'], frame, now, hand_candidate['metadata'])
                     state.holding_object = True
                     state.holding_hand = holding_hand
                     state.last_holding_time = now
@@ -572,7 +612,9 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                             (0, 0, 255),
                             2,
                         )
-                        if now - cam["last_alert_time"] > ALERT_COOLDOWN:
+                        candidate = cam['risk'].observe(int(track_id),
+                            ['object_disappearance', 'hand_to_waist', 'concealment_candidate'], now)
+                        if candidate:
                             trigger_incident(
                                 camera_id,
                                 cam["name"],
@@ -581,10 +623,11 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                                     "An item interaction was followed by hand movement "
                                     "near the hip/waist region. Human review required."
                                 ),
-                                0.72,
+                                candidate["risk_score"],
                                 frame,
                                 now,
                                 {
+                                    **candidate["metadata"],
                                     "track_id": int(track_id),
                                     "hand": state.holding_hand,
                                     "heuristic": "upstream_item_disappearance_plus_hip_proximity",
@@ -648,6 +691,10 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                         1,
                     )
 
+        for zone in cam['zones']:
+            if zone.enabled:
+                polygon = np.array([(x * frame.shape[1], y * frame.shape[0]) for x, y in zone.points], dtype=np.int32)
+                cv2.polylines(frame, [polygon], True, (0, 200, 200), 2)
         roi = cam.get("roi_points", [])
         if roi:
             cv2.polylines(frame, [np.array(roi, dtype=np.int32)], True, (0, 255, 255), 2)
@@ -672,10 +719,31 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
 video_stop = threading.Event()
 
 
+def active_recordings() -> set[str]:
+    return set().union(*(cam['recorder'].active_incidents() for _, cam in camera_manager.get_runtime_items()))
+
+
+def make_retention() -> RetentionManager:
+    return RetentionManager(database, [ALERT_DIR, INCIDENT_DIR], active_recordings,
+        days=float(os.getenv('SHOPAWARE_RETENTION_DAYS', '30')),
+        max_bytes=int(os.getenv('SHOPAWARE_MAX_STORAGE_BYTES', str(10 * 1024**3))))
+
+
+storage_status: dict[str, Any] = {}
+
+
 def maintenance_loop() -> None:
+    global storage_status
+    last_retention = 0.0
     while not video_stop.wait(0.5):
         for _, cam in camera_manager.get_runtime_items():
             cam["recorder"].expire()
+        if time.monotonic() - last_retention >= 60:
+            try:
+                storage_status = make_retention().enforce()
+            except Exception:
+                storage_status = {'error': 'Storage maintenance failed'}
+            last_retention = time.monotonic()
 
 
 def video_loop() -> None:
@@ -683,7 +751,7 @@ def video_loop() -> None:
     try:
         load_models()
     except Exception as exc:
-        print(f"Model initialization failed: {redact(str(exc))}")
+        logger.error(f"Model initialization failed: {redact(str(exc))}")
         return
 
     no_signal = np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -728,7 +796,7 @@ def video_loop() -> None:
                 latest_frame = {"type": "multi_frame", "cameras": frames_payload}
             time.sleep(0.03)
         except Exception as exc:
-            print(f"Video loop error: {redact(str(exc))}")
+            logger.error(f"Video loop error: {redact(str(exc))}")
             time.sleep(1)
 
 
@@ -744,8 +812,80 @@ async def validation_error_handler(request, exc):
     ]})
 
 
-app.mount("/alerts", StaticFiles(directory=str(ALERT_DIR)), name="alerts")
-app.mount("/incident-media", StaticFiles(directory=str(INCIDENT_DIR)), name="incident-media")
+@app.middleware("http")
+async def require_authentication(request: Request, call_next):
+    if request.method == 'OPTIONS' or request.url.path == '/health/live':
+        return await call_next(request)
+    mutating = request.method not in {'GET', 'HEAD', 'OPTIONS'}
+    if mutating and request.headers.get('origin') not in CORS_ORIGINS:
+        return JSONResponse(status_code=403, content={'detail': 'Untrusted request origin'})
+    session = auth.session(request.cookies.get(COOKIE))
+    if request.url.path != '/auth/login':
+        if session is None:
+            return JSONResponse(status_code=401, content={'detail': 'Authentication required'})
+        if mutating and not token_secrets.compare_digest(request.headers.get('x-csrf-token', ''), session['csrf']):
+            return JSONResponse(status_code=403, content={'detail': 'CSRF token required'})
+    request.state.session = session
+    response = await call_next(request)
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+class LoginInput(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+@app.post('/auth/login')
+def login(credentials: LoginInput, request: Request):
+    try:
+        result = auth.login(credentials.username, credentials.password, request.client.host if request.client else 'unknown')
+    except PermissionError:
+        raise HTTPException(429, 'Too many login attempts')
+    if not result:
+        raise HTTPException(401, 'Invalid username or password')
+    token, session = result
+    auth.logout(request.cookies.get(COOKIE))
+    response = JSONResponse(session)
+    response.set_cookie(COOKIE, token, httponly=True, secure=COOKIE_SECURE,
+                        samesite='strict', max_age=int(auth.lifetime), path='/')
+    return response
+
+
+@app.get('/auth/session')
+def current_session(request: Request):
+    return request.state.session
+
+
+@app.post('/auth/logout')
+def logout(request: Request):
+    auth.logout(request.cookies.get(COOKIE))
+    response = JSONResponse({'message': 'Logged out'})
+    response.delete_cookie(COOKIE, secure=COOKIE_SECURE, httponly=True, samesite='strict')
+    return response
+
+
+@app.get('/health/live')
+def live():
+    return {'status': 'alive'}
+
+
+@app.get('/incidents/{incident_id}/media/{kind}')
+def incident_media(incident_id: str, kind: str):
+    incident = database.incident(incident_id)
+    if not incident or kind not in {'snapshot', 'clip'}:
+        raise HTTPException(404, 'Media not found')
+    value = incident.get(kind + '_path')
+    if not value:
+        raise HTTPException(404, 'Media not available')
+    root = (ALERT_DIR if kind == 'snapshot' else INCIDENT_DIR).resolve()
+    path = Path(value).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(404, 'Media not available')
+    return FileResponse(path, media_type='image/jpeg' if kind == 'snapshot' else 'video/mp4')
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -757,8 +897,13 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    conn = database.connect()
+    try:
+        incident_counts = {row['review_status']: row['count'] for row in conn.execute('SELECT review_status, COUNT(*) AS count FROM incidents GROUP BY review_status')}
+    finally:
+        conn.close()
     return {
-        "status": "ok" if not model_load_error else "degraded",
+        "status": "degraded" if model_load_error else ("ok" if model_pose is not None else "loading"),
         "app": APP_NAME,
         "detection_model": DETECTION_MODEL,
         "pose_model": POSE_MODEL,
@@ -766,14 +911,45 @@ def health() -> dict[str, Any]:
         "specialized_loaded": model_is_specialized,
         "model_error": model_load_error or None,
         "camera_count": len(camera_manager.list_safe()),
+        "incident_counts": incident_counts,
+        "telemetry": {
+            "system_cpu_percent": psutil.cpu_percent(interval=0.05),
+            "process_rss_bytes": psutil.Process().memory_info().rss,
+            "system_available_memory_bytes": psutil.virtual_memory().available,
+            "cuda_available": torch.cuda.is_available(),
+            "cuda_allocated_bytes": torch.cuda.memory_allocated() if torch.cuda.is_available() else None,
+        },
         "recording": {
             "pre_event_seconds": PRE_EVENT_SECONDS,
             "post_event_seconds": POST_EVENT_SECONDS,
             "sample_fps": RECORDING_FPS,
         },
+        "storage": storage_status,
+        "alerts": {"status": alert_dispatcher.status, "queued": alert_dispatcher.queue.qsize()},
         "tracker_architecture": "shared_pose_inference_per_camera_bytetrack",
         "tracker_isolation_qualified": False,  # real multi-camera qualification pending
     }
+
+
+@app.get('/health/ready')
+def readiness():
+    conn = database.connect()
+    try:
+        conn.execute('SELECT 1').fetchone()
+    finally:
+        conn.close()
+    ready = model_pose is not None and model_obj is not None and not model_load_error
+    return JSONResponse(status_code=200 if ready else 503, content={'ready': ready})
+
+
+@app.get('/settings')
+def get_settings():
+    return settings_store.public()
+
+
+@app.put('/settings')
+def save_settings(payload: SettingsInput):
+    return {'settings': settings_store.save(payload), 'restart_required': True}
 
 
 @app.get("/cameras")
@@ -797,9 +973,67 @@ def add_camera(camera: CameraInput) -> dict[str, Any]:
 
 @app.delete("/cameras/{camera_id}")
 def delete_camera(camera_id: str) -> dict[str, str]:
-    if not camera_manager.remove_camera(camera_id):
-        raise HTTPException(status_code=404, detail="Camera not found")
+    with camera_lifecycle_lock:
+        if not camera_manager.remove_camera(camera_id):
+            raise HTTPException(status_code=404, detail="Camera not found")
     return {"message": "Camera removed"}
+
+
+class EnabledInput(BaseModel):
+    enabled: bool
+
+
+@app.put('/cameras/{camera_id}/enabled')
+def enable_camera(camera_id: str, payload: EnabledInput):
+    with camera_lifecycle_lock:
+        with camera_manager.lock:
+            old = camera_manager.cameras.pop(camera_id, None)
+        if not old:
+            raise HTTPException(404, 'Camera not found')
+        old['tracking'].close()
+        if old.get('cap'):
+            old['cap'].release()
+        old['recorder'].force_finalize_all()
+        conn = database.connect()
+        try:
+            conn.execute('UPDATE cameras SET enabled=? WHERE id=?', (int(payload.enabled), camera_id))
+            conn.commit()
+        finally:
+            conn.close()
+        row = database.get_camera(camera_id)
+        with camera_manager.lock:
+            camera_manager.cameras[camera_id] = camera_manager._row_to_runtime(row)
+    return {'enabled': payload.enabled}
+
+
+@app.get('/cameras/{camera_id}/frame')
+def camera_frame(camera_id: str):
+    with camera_manager.lock:
+        camera = camera_manager.cameras.get(camera_id)
+    if not camera or not camera.get('cap'):
+        raise HTTPException(404, 'Camera frame unavailable')
+    ok, frame = camera['cap'].read()
+    if not ok or frame is None:
+        raise HTTPException(404, 'Camera frame unavailable')
+    ok, jpeg = cv2.imencode('.jpg', frame)
+    if not ok:
+        raise HTTPException(503, 'Frame encoding failed')
+    return Response(jpeg.tobytes(), media_type='image/jpeg')
+
+
+@app.post('/cameras/{camera_id}/test')
+def test_camera(camera_id: str):
+    row = database.get_camera(camera_id)
+    if not row:
+        raise HTTPException(404, 'Camera not found')
+    worker = ThreadedCamera(build_runtime_url(row['rtsp_url'], row['username'], secrets.decrypt(row['password_enc'])))
+    try:
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline and not worker.healthy():
+            time.sleep(0.1)
+        return {'connected': worker.healthy(), 'status': worker.status}
+    finally:
+        worker.release()
 
 
 @app.get("/cameras/{camera_id}/roi")
@@ -819,6 +1053,44 @@ def set_camera_roi(camera_id: str, roi: RoiInput) -> dict[str, Any]:
     return {"status": "success", "points": roi.points}
 
 
+class ZonesInput(BaseModel):
+    zones: list[Zone] = Field(max_length=32)
+
+
+@app.get('/cameras/{camera_id}/zones')
+def get_zones(camera_id: str):
+    if not database.get_camera(camera_id):
+        raise HTTPException(404, 'Camera not found')
+    return [z.model_dump() for z in load_zones(camera_id)]
+
+
+@app.put('/cameras/{camera_id}/zones')
+def put_zones(camera_id: str, payload: ZonesInput):
+    if len({z.id for z in payload.zones}) != len(payload.zones):
+        raise HTTPException(422, 'Zone identifiers must be unique')
+    with camera_manager.lock:
+        cam = camera_manager.cameras.get(camera_id)
+    if not cam:
+        raise HTTPException(404, 'Camera not found')
+    with cam['tracking'].lock:
+        if cam['tracking'].closed:
+            raise HTTPException(404, 'Camera was removed')
+        conn = database.connect()
+        try:
+            conn.execute('DELETE FROM zones WHERE camera_id=?', (camera_id,))
+            conn.executemany('INSERT INTO zones VALUES(?,?,?,?,?,?)',
+                [(z.id, camera_id, z.name, z.type, json.dumps(z.points), int(z.enabled)) for z in payload.zones])
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise HTTPException(409, 'Zone update conflicts with existing configuration')
+        finally:
+            conn.close()
+        cam['zones'] = payload.zones
+        cam['risk'] = RiskEngine(threshold=float(os.getenv('SHOPAWARE_RISK_THRESHOLD', '65')))
+    return [z.model_dump() for z in payload.zones]
+
+
 @app.get("/history")
 def history(limit: int = 100) -> list[dict[str, Any]]:
     return database.history(min(max(limit, 1), 500))
@@ -833,8 +1105,8 @@ def incident_detail(incident_id: str) -> dict[str, Any]:
 
 
 @app.post("/incidents/{incident_id}/review")
-def review_incident(incident_id: str, review: ReviewInput) -> dict[str, Any]:
-    row = database.set_incident_review(incident_id, review.status)
+def review_incident(incident_id: str, review: ReviewInput, request: Request) -> dict[str, Any]:
+    row = database.set_incident_review(incident_id, review.status, request.state.session["username"], review.notes)
     if row is None:
         raise HTTPException(status_code=404, detail="Incident not found")
     incident = database.incident(incident_id)
@@ -844,9 +1116,15 @@ def review_incident(incident_id: str, review: ReviewInput) -> dict[str, Any]:
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
+    if websocket.headers.get('origin') not in CORS_ORIGINS or not auth.session(websocket.cookies.get(COOKIE)):
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     try:
         while True:
+            if not auth.session(websocket.cookies.get(COOKIE)):
+                await websocket.close(code=1008)
+                return
             payload = None
             with latest_frame_lock:
                 if latest_frame is not None:
@@ -860,6 +1138,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    conn = database.connect()
+    try:
+        conn.execute("UPDATE incidents SET media_status='interrupted' WHERE media_status='pending'")
+        conn.commit()
+    finally:
+        conn.close()
     video_stop.clear()
     thread = threading.Thread(target=video_loop, daemon=True)
     thread.start()
@@ -870,6 +1154,7 @@ async def lifespan(_: FastAPI):
     maintenance.join(timeout=5)
     thread.join(timeout=30)
     camera_manager.shutdown()
+    alert_dispatcher.close()
 
 
 app.router.lifespan_context = lifespan
