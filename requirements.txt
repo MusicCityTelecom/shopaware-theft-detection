@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+websockets
+opencv-python
+ultralytics==8.4.150
+numpy
+lapx
+requests
+python-dotenv
+psutil
+pydantic
+python-multipart
+cryptography
+argon2-cffi>=25.1,<26
