@@ -7,7 +7,9 @@ venv/
 env/
 .env
 
-# Runtime data
+# Runtime secrets / data
+.shopaware.key
+data/
 shopaware.db
 theft_detection.db
 alerts/
@@ -15,8 +17,12 @@ incidents/
 cameras.json
 settings.json
 error_log.txt
+
+# Model artifacts
 models/*.pt
 *.pt
+*.onnx
+*.engine
 
 # Node / Next.js
 node_modules/
