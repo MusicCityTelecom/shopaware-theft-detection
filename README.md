@@ -1,149 +1,164 @@
 # ShopAware Theft Detection
 
-ShopAware is a web-based retail video analytics project for ingesting RTSP camera streams, running computer-vision inference, identifying theft/suspicious-event candidates, preserving incident video, and sending real-time alerts.
+ShopAware is a web-based retail video analytics project for ingesting RTSP camera streams, running computer-vision inference, identifying suspected theft/concealment events, preserving incident evidence, and sending real-time alerts.
 
-> **Project status:** Early development / proof-of-concept. Do not treat detections as proof of theft. Human review is required before any intervention or accusation.
+> **Project status:** Early development / proof-of-concept. Do not treat detections as proof of theft. Human review is required before intervention or accusation.
 
-## Goals
+## Current bootstrap status
 
-- Add/manage RTSP cameras from a browser.
-- Store RTSP credentials securely instead of exposing passwords in logs or UI responses.
-- Run object detection and tracking against multiple live channels.
-- Keep the detector behind a provider interface so inference backends can be changed without rewriting the application.
-- Build temporal theft/suspicion scoring on top of detections and tracks rather than pretending a single-frame object detector can determine intent.
-- Keep a rolling pre-event buffer and save pre/post-event incident clips.
-- Send email alerts immediately when an incident crosses the configured threshold.
-- Add SMS/text alert providers later without changing the incident pipeline.
-- Support CPU development and NVIDIA GPU production deployments.
-- Provide an incident-review UI with camera, timestamp, score/reason, snapshot, clip, and disposition.
+The project is being bootstrapped from concepts and implementation patterns in `vahapogut/Theft-Detection` at reviewed upstream revision `fdba673494878d7c8bed7b324e071a209c158dff`, while replacing the upstream YOLOv8 defaults with configurable **Ultralytics YOLO26** models.
 
-## Important detection limitation
+Current defaults:
 
-YOLOv8 is an object detector, not a complete theft detector. Reliable retail loss-prevention analytics require temporal evidence such as person tracking, merchandise-zone interaction, hand/object motion, concealment behavior, exit behavior, and usually a custom retail dataset/model. ShopAware therefore separates:
+- Detection: `yolo26n.pt`
+- Pose/keypoints: `yolo26n-pose.pt`
+- Optional specialized activity model: `shoplifting.pt` when present
 
-1. **Detection/tracking** — people, bags, products/custom classes and persistent track IDs.
-2. **Signal extraction** — zone entry, dwell, product interaction, concealment-like motion, object disappearance, exit, etc.
-3. **Decision engine** — combines signals over time into a scored incident candidate.
-4. **Human review** — confirms/dismisses the candidate.
+The backend already includes:
 
-The first milestone intentionally produces **incident candidates**, not definitive theft accusations.
+- FastAPI API and WebSocket live-frame transport
+- multi-camera RTSP capture workers
+- automatic reconnect/backoff
+- encrypted RTSP password storage
+- masked RTSP URLs in API responses
+- YOLO26 detection and YOLO26 pose/tracking configuration
+- upstream-compatible object/hand/hip concealment heuristics
+- conservative `suspected_concealment` incident language
+- SQLite camera/incident persistence
+- incident snapshots and review status
+- SMTP email alert plumbing
+- Docker/Docker Compose bootstrap
+- unit tests for credential redaction
+- optional model-load smoke tests
 
-## Ultralytics licensing
+Incident video clips, authentication, the adapted Next.js dashboard, richer zone types, and model benchmarking are next.
 
-Ultralytics YOLO is available under AGPL-3.0 and commercial/Enterprise licensing. ShopAware is being structured so the Ultralytics implementation is an optional detector adapter. Before deploying a private, proprietary, internal-business, or commercial product using Ultralytics code/models, confirm the applicable Ultralytics license and obtain an Enterprise license if required.
+## Quick development start
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\\Scripts\\activate
+pip install -r requirements-dev.txt
+cp .env.example .env
+pytest -q
+uvicorn backend:app --reload --host 0.0.0.0 --port 8000
+```
+
+Then open FastAPI docs at `http://127.0.0.1:8000/docs`.
+
+The standard YOLO26 checkpoints are intentionally not committed to this repository. Ultralytics can resolve/download them at runtime, or operators can configure alternate model paths through environment variables.
+
+## Camera API
+
+Add an RTSP camera with credentials separated from the URL:
+
+```json
+{
+  "name": "Liquor Aisle 1",
+  "rtsp_url": "rtsp://10.0.0.25:554/Streaming/Channels/101",
+  "username": "camera-user",
+  "password": "camera-password"
+}
+```
+
+Passwords are encrypted at rest. Normal camera-list responses return a masked stream representation rather than the decrypted password.
+
+## Detection model
+
+ShopAware does not assume that a generic object detector can prove theft. The initial event pipeline combines:
+
+1. person pose/keypoint tracking;
+2. object proximity to wrists;
+3. item disappearance after interaction;
+4. wrist movement near the waist/hip area;
+5. configured camera ROI interactions;
+6. temporal state per tracked person.
+
+A candidate event is stored for review instead of being labeled as confirmed theft.
+
+The first specialized-model path remains compatible with a separately supplied `shoplifting.pt`, but the long-term goal is a trained ShopAware retail/action model with measured precision/recall against representative footage.
 
 ## Planned architecture
 
 ```text
-Browser
-  |
-  v
-FastAPI web/API  ----> SQL database
-  |                     cameras / incidents / alert config
-  |
-  +----> Camera supervisor ----> RTSP ingest ----> frame buffer
-                                   |                 |
-                                   v                 +--> incident clip writer
-                              detector adapter
-                                   |
-                              object tracker
-                                   |
-                              signal engine
-                                   |
-                              risk/decision engine
-                                   |
-                    +--------------+-------------+
-                    |                            |
-                 incident DB                  alert bus
-                    |                            |
-                 clip/snapshot               SMTP email
-                                              SMS later
+Browser / Dashboard
+        |
+        v
+FastAPI API + WebSocket
+        |
+        +--> Camera manager --> RTSP workers --> rolling frame pipeline
+        |                           |
+        |                           +--> YOLO26 detection
+        |                           +--> YOLO26 pose/tracking
+        |                           +--> custom model (optional)
+        |                                      |
+        |                                      v
+        |                              temporal risk engine
+        |                                      |
+        +--> SQLite incidents <---------------+
+        |        |
+        |        +--> snapshot / clip evidence
+        |        +--> review status
+        |
+        +--> SMTP alert provider
+                 +--> SMS provider later
 ```
-
-## Initial technology choices
-
-- Python 3.12+
-- FastAPI + Jinja2 web UI
-- SQLAlchemy
-- SQLite for local development; PostgreSQL/MySQL-compatible production configuration will follow
-- OpenCV/FFmpeg for RTSP ingest and media handling
-- Pluggable detector interface
-- Optional Ultralytics YOLOv8 detector/tracker adapter
-- SMTP email alerts
-- Docker / Docker Compose
-
-## Repository layout
-
-```text
-app/
-  api/            HTTP/API routes
-  core/           configuration, security, logging
-  db/             database/session/model layer
-  detectors/      inference backend adapters
-  services/       camera, incidents, alerts, recording
-  theft/          temporal signal + decision logic
-  templates/      server-rendered web UI
-  static/         CSS/JS/assets
-tests/
-docs/
-```
-
-## Development milestones
-
-### M0 — Bootstrap
-- Application skeleton and configuration
-- Database models
-- Camera CRUD
-- Encrypted camera credentials
-- Health endpoint
-- Docker development environment
-
-### M1 — RTSP + inference
-- RTSP connectivity test
-- Camera worker lifecycle/reconnect
-- YOLOv8 detector adapter
-- Tracking IDs
-- Live per-camera status/metrics
-
-### M2 — Incident recording + email
-- Rolling pre-event frame/video buffer
-- Incident snapshot
-- Pre/post-event MP4 clip
-- SMTP alerts
-- Incident review UI
-
-### M3 — Retail theft signals
-- Configurable merchandise/checkout/exit zones
-- Dwell and interaction signals
-- Pose/hand proximity signals
-- Concealment candidate model/rules
-- Exit-with-risk escalation
-- Per-camera sensitivity and cooldowns
-
-### M4 — Production hardening
-- GPU worker scheduling
-- Multi-process/multi-host workers
-- Redis/message queue if required by scale
-- Retention policies
-- Audit trail and user roles
-- TLS/reverse-proxy deployment
-- Backup/restore
-- SMS provider adapter
-- Dataset annotation/training workflow
 
 ## Security requirements
 
 - Never log complete RTSP URLs containing credentials.
-- Encrypt camera passwords at rest.
+- Keep camera passwords encrypted at rest.
 - Redact secrets from API responses and exception messages.
-- Restrict camera URLs to authorized administrators.
-- Store incident media outside the public static tree and serve it through authenticated routes.
-- Use least-privilege database and filesystem permissions in production.
+- Keep runtime encryption keys outside Git.
+- Store incident media outside frontend static assets in production.
+- Add application authentication before exposing ShopAware outside a trusted development network.
 
-## Legal / operational note
+## Upstream attribution and licensing
 
-ShopAware should be treated as a loss-prevention decision-support tool. Detection scores are probabilistic and can be wrong. A trained human should review evidence before taking action. Deployment should comply with applicable privacy, surveillance, employment, biometric, retention, and notice laws/policies.
+The upstream `vahapogut/Theft-Detection` project is MIT licensed. Its required attribution is retained in `THIRD_PARTY_NOTICES.md` and `docs/UPSTREAM_BASELINE.md`.
 
-## Next step
+Ultralytics software/models have separate licensing terms. Do not assume the upstream MIT license relicenses Ultralytics code or model weights. Model weights are not committed to this repository.
 
-The bootstrap implementation lives on a feature branch and will add the runnable FastAPI application, camera model/API, encrypted credentials, detector abstraction, incident model, email-alert service, and Docker/dev configuration.
+## Development roadmap
+
+### Bootstrap
+- [x] repository initialized
+- [x] upstream baseline reviewed/pinned
+- [x] YOLO26 selected for new default detector/pose paths
+- [x] configurable model paths
+- [x] encrypted RTSP password storage
+- [x] reconnecting multi-camera backend baseline
+- [x] snapshot incidents + review states
+- [x] SMTP alert plumbing
+- [x] Docker bootstrap
+- [x] unit-test/CI bootstrap
+- [ ] import/adapt Next.js dashboard
+- [ ] live YOLO26 regression qualification
+
+### Incident evidence
+- [ ] rolling pre-event buffer
+- [ ] post-event continuation
+- [ ] MP4/H.264 incident clips
+- [ ] retention/disk quota
+- [ ] authenticated evidence routes
+
+### Detection quality
+- [ ] merchandise / restricted / checkout / exit zone types
+- [ ] scored multi-signal incidents
+- [ ] candidate deduplication
+- [ ] per-camera thresholds
+- [ ] YOLO26n/s/m benchmarking
+- [ ] retail dataset/annotation workflow
+- [ ] ShopAware-specific trained model
+
+### Production hardening
+- [ ] authentication and roles
+- [ ] audit trail
+- [ ] production reverse proxy/TLS
+- [ ] GPU deployment profiles
+- [ ] SMS alert provider
+- [ ] backup/restore
+
+## Safety / operational note
+
+ShopAware is a loss-prevention decision-support system. Computer-vision detections are probabilistic and can be wrong. A trained human should review incident evidence before taking action.
