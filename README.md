@@ -136,9 +136,9 @@ FastAPI API + WebSocket
 
 ## Known qualification blocker: multi-camera tracker state
 
-The application currently keeps its own behavioral state under `(camera_id, track_id)`, but that alone does not prove that one Ultralytics `persist=True` tracker instance is internally isolated across sequential frames from different cameras.
+Shared YOLO26 pose inference now feeds an independent ByteTrack context and ID allocator per camera. Reconnect, resolution change and deletion clear that camera's temporal state. Automated tests compare isolated and interleaved tracking outputs, including keypoint alignment and lifecycle cleanup. See [tracker architecture and source investigation](docs/TRACKER_ISOLATION.md).
 
-Issue #3 tracks this explicitly. Multi-camera tracking must not be described as production-qualified until independent tracker state is proven or implemented per camera.
+Issue #3 remains open for real two-camera/model and hardware qualification. Synthetic test results do not establish end-to-end deployment quality.
 
 ## Security requirements
 

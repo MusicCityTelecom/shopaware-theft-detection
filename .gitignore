@@ -36,3 +36,11 @@ dashboard/.env.local
 Thumbs.db
 .vscode/
 .idea/
+
+# Local qualification output
+.research/
+.pnpm-store/
+*-install.log
+*-tests.log
+*-build.log
+*-lint.log

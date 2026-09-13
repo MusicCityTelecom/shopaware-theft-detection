@@ -22,10 +22,14 @@ import numpy as np
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 from ultralytics import YOLO
 
+from shopaware.ingest import ThreadedCamera
+from shopaware.tracking import CameraTrackingContext
 from shopaware.db import Database
 from shopaware.recording import RollingClipRecorder
 from shopaware.security import (
@@ -82,11 +86,7 @@ class CameraInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_url(self) -> "CameraInput":
-        parts = urlsplit(self.rtsp_url)
-        if parts.scheme.lower() not in {"rtsp", "rtsps", "http", "https"}:
-            raise ValueError("Camera URL must use rtsp://, rtsps://, http://, or https://")
-        if not parts.hostname:
-            raise ValueError("Camera URL must include a hostname or IP address")
+        self.rtsp_url = clean_camera_url(self.rtsp_url)
         return self
 
 
@@ -103,93 +103,6 @@ class ReviewInput(BaseModel):
         if self.status not in allowed:
             raise ValueError(f"status must be one of: {', '.join(sorted(allowed))}")
         return self
-
-
-class PersonState:
-    def __init__(self, track_id: int):
-        self.track_id = track_id
-        self.holding_object = False
-        self.holding_hand: str | None = None
-        self.last_holding_time = 0.0
-        self.last_seen = time.time()
-
-
-class ThreadedCamera:
-    """Reconnecting OpenCV capture worker.
-
-    This stays intentionally close to the upstream prototype. Production
-    deployment may later use FFmpeg/GStreamer ingest, but the public interface
-    can remain unchanged.
-    """
-
-    def __init__(self, runtime_url: str):
-        self.runtime_url = runtime_url
-        self.cap: cv2.VideoCapture | None = None
-        self.frame: np.ndarray | None = None
-        self.ret = False
-        self.running = True
-        self.lock = threading.Lock()
-        self.last_frame_at = 0.0
-        self.last_error = ""
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-
-    def _open(self) -> cv2.VideoCapture:
-        cap = cv2.VideoCapture(self.runtime_url)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        return cap
-
-    def _run(self) -> None:
-        backoff = 1.0
-        while self.running:
-            if self.cap is None or not self.cap.isOpened():
-                try:
-                    self.cap = self._open()
-                except Exception as exc:
-                    self.last_error = redact(str(exc), [self.runtime_url])
-                    self.cap = None
-
-                if self.cap is None or not self.cap.isOpened():
-                    self.ret = False
-                    time.sleep(backoff)
-                    backoff = min(backoff * 2, 30.0)
-                    continue
-                backoff = 1.0
-
-            ret, frame = self.cap.read()
-            if not ret or frame is None:
-                self.ret = False
-                self.last_error = "stream read failed"
-                try:
-                    self.cap.release()
-                except Exception:
-                    pass
-                self.cap = None
-                time.sleep(0.25)
-                continue
-
-            with self.lock:
-                self.ret = True
-                self.frame = frame
-                self.last_frame_at = time.time()
-                self.last_error = ""
-
-            time.sleep(0.005)
-
-    def read(self) -> tuple[bool, np.ndarray | None]:
-        with self.lock:
-            return self.ret, self.frame.copy() if self.frame is not None else None
-
-    def healthy(self) -> bool:
-        return self.ret and self.last_frame_at > 0 and (time.time() - self.last_frame_at) < 10
-
-    def release(self) -> None:
-        self.running = False
-        if self.cap is not None:
-            try:
-                self.cap.release()
-            except Exception:
-                pass
 
 
 def on_clip_complete(incident_id: str, path: Path) -> None:
@@ -224,6 +137,7 @@ class CameraManager:
     def _row_to_runtime(self, row: Any) -> dict[str, Any]:
         password = secrets.decrypt(row["password_enc"])
         runtime_url = build_runtime_url(row["rtsp_url"], row["username"], password)
+        recorder = self._make_recorder(row["id"])
         return {
             "id": row["id"],
             "name": row["name"],
@@ -232,9 +146,13 @@ class CameraManager:
             "has_password": bool(password),
             "roi_points": json.loads(row["roi_json"] or "[]"),
             "enabled": bool(row["enabled"]),
-            "cap": ThreadedCamera(runtime_url) if row["enabled"] else None,
+            "cap": ThreadedCamera(runtime_url, on_frame=recorder.push) if row["enabled"] else None,
             "runtime_url": runtime_url,
-            "recorder": self._make_recorder(row["id"]),
+            "recorder": recorder,
+            "tracking": CameraTrackingContext(),
+            "last_inference_at": 0.0,
+            "last_sequence": -1,
+            "inference_fps": float(os.getenv("SHOPAWARE_INFERENCE_FPS", "5")),
             "last_alert_time": 0.0,
             "last_objects": [],
             "roi_entry_times": {},
@@ -266,12 +184,11 @@ class CameraManager:
     def remove_camera(self, camera_id: str) -> bool:
         with self.lock:
             existing = self.cameras.pop(camera_id, None)
-            if existing:
-                recorder: RollingClipRecorder | None = existing.get("recorder")
-                if recorder:
-                    recorder.force_finalize_all()
-                if existing.get("cap"):
-                    existing["cap"].release()
+        if existing:
+            existing["tracking"].close()
+            if existing.get("cap"):
+                existing["cap"].release()
+            existing["recorder"].force_finalize_all()
         return database.delete_camera(camera_id)
 
     def set_roi(self, camera_id: str, points: list[list[int]]) -> None:
@@ -318,7 +235,9 @@ class CameraManager:
                             cam["username"],
                             cam["has_password"],
                         ),
-                        "status": status,
+                        "status": status if status in {"disabled", "active"} else (cap.status if cap else "error"),
+                        "last_frame_at": cap.last_frame_at if cap else None,
+                        "enabled": cam["enabled"],
                         "roi_points": cam.get("roi_points", []),
                         "recording": recorder.stats() if recorder else None,
                     }
@@ -331,6 +250,9 @@ class CameraManager:
 
     def shutdown(self) -> None:
         for _, cam in self.get_runtime_items():
+            cam["tracking"].close()
+            if cam.get("cap"):
+                cam["cap"].release()
             recorder: RollingClipRecorder | None = cam.get("recorder")
             if recorder:
                 recorder.force_finalize_all()
@@ -339,7 +261,6 @@ class CameraManager:
 
 
 camera_manager = CameraManager()
-person_states: dict[tuple[str, int], PersonState] = {}
 latest_frame: dict[str, Any] | None = None
 latest_frame_lock = threading.Lock()
 models_lock = threading.Lock()
@@ -512,6 +433,245 @@ def load_models() -> None:
             raise
 
 
+def process_camera(camera_id: str, cam: dict[str, Any], now: float,
+                   run_obj: bool, no_signal: np.ndarray) -> dict[str, str] | None:
+    """Called with this camera's context lock held through inference and events."""
+    context = cam["tracking"]
+    cap = cam["cap"]
+    ret, frame, sequence, generation, captured_at = cap.snapshot()
+    cam["last_sequence"] = sequence
+    if not ret or frame is None:
+        encode_frame = no_signal.copy()
+    else:
+        resolution = frame.shape[:2]
+        if context.generation != generation or context.resolution != resolution:
+            context.reset(generation, resolution)
+            cam["roi_entry_times"].clear()
+            cam["last_objects"] = []
+        # Preserve original evidence before annotations are drawn.
+        # Evidence is sampled by capture before inference/annotations.
+        now = captured_at
+
+        assert model_pose is not None
+        assert model_obj is not None
+
+        pose_results = model_pose.predict(frame, verbose=False, classes=[0], conf=0.1)
+        pose_results = [context.update(pose_results[0], now)]
+        detected_objects: list[np.ndarray] = cam.get("last_objects", [])
+
+        if run_obj:
+            detected_objects = []
+            obj_results = model_obj(frame, verbose=False, conf=0.30)
+            if obj_results:
+                boxes = obj_results[0].boxes.xyxy.cpu().numpy().astype(int)
+                classes = obj_results[0].boxes.cls.cpu().numpy().astype(int)
+                confidences = obj_results[0].boxes.conf.cpu().numpy()
+
+                if model_is_specialized:
+                    for box, cls_id, confidence in zip(boxes, classes, confidences):
+                        class_name = str(model_obj.names[int(cls_id)]).lower()
+                        if any(token in class_name for token in ("shoplift", "suspicious", "theft", "conceal")):
+                            cv2.rectangle(frame, tuple(box[:2]), tuple(box[2:]), (0, 0, 255), 3)
+                            cv2.putText(
+                                frame,
+                                f"REVIEW: {class_name} {confidence:.2f}",
+                                (int(box[0]), max(20, int(box[1]) - 10)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.65,
+                                (0, 0, 255),
+                                2,
+                            )
+                            if now - cam["last_alert_time"] > ALERT_COOLDOWN:
+                                trigger_incident(
+                                    camera_id,
+                                    cam["name"],
+                                    "specialized_model_candidate",
+                                    f"Specialized activity model produced class '{class_name}'.",
+                                    float(confidence),
+                                    frame,
+                                    now,
+                                    {
+                                        "class_name": class_name,
+                                        "confidence": float(confidence),
+                                    },
+                                )
+                                cam["last_alert_time"] = now
+                else:
+                    # Upstream-compatible COCO classes used only as a weak interaction signal.
+                    target_classes = {
+                        24, 25, 26, 28, 39, 40, 41, 42, 43,
+                        67, 73, 74, 75, 76, 77, 78, 79,
+                    }
+                    for box, cls_id, confidence in zip(boxes, classes, confidences):
+                        if int(cls_id) in target_classes:
+                            detected_objects.append(box)
+                            label = f"ITEM {model_obj.names[int(cls_id)]} {confidence:.2f}"
+                            cv2.rectangle(frame, tuple(box[:2]), tuple(box[2:]), (0, 165, 255), 2)
+                            cv2.putText(
+                                frame,
+                                label,
+                                (int(box[0]), max(20, int(box[1]) - 5)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.45,
+                                (0, 165, 255),
+                                1,
+                            )
+                    cam["last_objects"] = detected_objects
+
+        if pose_results and pose_results[0].boxes.id is not None:
+            person_boxes = pose_results[0].boxes.xyxy.cpu().numpy().astype(int)
+            track_ids = pose_results[0].boxes.id.cpu().numpy().astype(int)
+            keypoints_all = (
+                pose_results[0].keypoints.xy.cpu().numpy()
+                if pose_results[0].keypoints is not None
+                else []
+            )
+
+            for idx, track_id in enumerate(track_ids):
+                box = person_boxes[idx]
+                keypoints = (
+                    keypoints_all[idx]
+                    if len(keypoints_all) > idx
+                    else np.empty((0, 2))
+                )
+                state = context.person(int(track_id), now)
+
+                left_has_obj = check_object_in_hand(keypoints, detected_objects, "LEFT")
+                right_has_obj = check_object_in_hand(keypoints, detected_objects, "RIGHT")
+                current_holding = left_has_obj or right_has_obj
+                holding_hand = "LEFT" if left_has_obj else "RIGHT" if right_has_obj else None
+
+                if current_holding:
+                    state.holding_object = True
+                    state.holding_hand = holding_hand
+                    state.last_holding_time = now
+                    cv2.putText(
+                        frame,
+                        f"ITEM INTERACTION ({holding_hand})",
+                        (int(box[0]), max(20, int(box[1]) - 55)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 255, 0),
+                        2,
+                    )
+
+                if state.holding_object and not current_holding:
+                    age = now - state.last_holding_time
+                    if (
+                        age < 3.0
+                        and state.holding_hand
+                        and check_concealment(keypoints, state.holding_hand)
+                    ):
+                        cv2.rectangle(frame, tuple(box[:2]), tuple(box[2:]), (0, 0, 255), 3)
+                        cv2.putText(
+                            frame,
+                            "SUSPECTED CONCEALMENT - REVIEW",
+                            (int(box[0]), max(20, int(box[1]) - 80)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.65,
+                            (0, 0, 255),
+                            2,
+                        )
+                        if now - cam["last_alert_time"] > ALERT_COOLDOWN:
+                            trigger_incident(
+                                camera_id,
+                                cam["name"],
+                                "suspected_concealment",
+                                (
+                                    "An item interaction was followed by hand movement "
+                                    "near the hip/waist region. Human review required."
+                                ),
+                                0.72,
+                                frame,
+                                now,
+                                {
+                                    "track_id": int(track_id),
+                                    "hand": state.holding_hand,
+                                    "heuristic": "upstream_item_disappearance_plus_hip_proximity",
+                                },
+                            )
+                            cam["last_alert_time"] = now
+                        state.holding_object = False
+                        state.holding_hand = None
+                    elif age >= 3.0:
+                        state.holding_object = False
+                        state.holding_hand = None
+
+                roi = cam.get("roi_points", [])
+                reaching, _ = check_reaching(keypoints, roi)
+                if reaching:
+                    cv2.putText(
+                        frame,
+                        "ROI INTERACTION",
+                        (int(box[0]), max(20, int(box[1]) - 30)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (0, 0, 255),
+                        2,
+                    )
+
+                center_x = int((box[0] + box[2]) / 2)
+                center_y = int((box[1] + box[3]) / 2)
+                inside = (
+                    len(roi) >= 3
+                    and cv2.pointPolygonTest(
+                        np.array(roi, dtype=np.int32),
+                        (center_x, center_y),
+                        False,
+                    ) >= 0
+                )
+                if inside:
+                    entry_times: dict[int, float] = cam["roi_entry_times"]
+                    entry_times.setdefault(int(track_id), now)
+                    dwell = now - entry_times[int(track_id)]
+                    if dwell >= LOITERING_THRESHOLD:
+                        cv2.putText(
+                            frame,
+                            f"DWELL {dwell:.1f}s",
+                            (int(box[0]), int(box[3]) + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            (0, 165, 255),
+                            2,
+                        )
+                else:
+                    cam["roi_entry_times"].pop(int(track_id), None)
+
+                if check_bending(keypoints):
+                    cv2.putText(
+                        frame,
+                        "BENDING",
+                        (int(box[0]), int(box[3]) + 40),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (255, 0, 0),
+                        1,
+                    )
+
+        roi = cam.get("roi_points", [])
+        if roi:
+            cv2.polylines(frame, [np.array(roi, dtype=np.int32)], True, (0, 255, 255), 2)
+        encode_frame = frame
+
+    ok, buffer = cv2.imencode(
+        ".jpg",
+        encode_frame,
+        [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY],
+    )
+    if ok:
+        return {
+                "camera_id": camera_id,
+                "name": cam["name"],
+                "data": base64.b64encode(buffer).decode("ascii"),
+            }
+
+
+    return None
+
+
+video_stop = threading.Event()
+
+
 def video_loop() -> None:
     global latest_frame
     try:
@@ -524,7 +684,7 @@ def video_loop() -> None:
     cv2.putText(no_signal, "NO SIGNAL", (420, 360), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
     frame_count = 0
 
-    while True:
+    while not video_stop.is_set():
         try:
             frames_payload: list[dict[str, str]] = []
             run_obj = frame_count % OBJECT_INFERENCE_EVERY_N_FRAMES == 0
@@ -535,237 +695,31 @@ def video_loop() -> None:
                 if cap is None:
                     continue
 
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    encode_frame = no_signal.copy()
-                else:
-                    # Preserve original evidence before annotations are drawn.
-                    camera_manager.push_evidence_frame(camera_id, frame, now)
-
-                    assert model_pose is not None
-                    assert model_obj is not None
-
-                    pose_results = model_pose.track(frame, persist=True, verbose=False, classes=[0])
-                    detected_objects: list[np.ndarray] = cam.get("last_objects", [])
-
-                    if run_obj:
-                        detected_objects = []
-                        obj_results = model_obj(frame, verbose=False, conf=0.30)
-                        if obj_results:
-                            boxes = obj_results[0].boxes.xyxy.cpu().numpy().astype(int)
-                            classes = obj_results[0].boxes.cls.cpu().numpy().astype(int)
-                            confidences = obj_results[0].boxes.conf.cpu().numpy()
-
-                            if model_is_specialized:
-                                for box, cls_id, confidence in zip(boxes, classes, confidences):
-                                    class_name = str(model_obj.names[int(cls_id)]).lower()
-                                    if any(token in class_name for token in ("shoplift", "suspicious", "theft", "conceal")):
-                                        cv2.rectangle(frame, tuple(box[:2]), tuple(box[2:]), (0, 0, 255), 3)
-                                        cv2.putText(
-                                            frame,
-                                            f"REVIEW: {class_name} {confidence:.2f}",
-                                            (int(box[0]), max(20, int(box[1]) - 10)),
-                                            cv2.FONT_HERSHEY_SIMPLEX,
-                                            0.65,
-                                            (0, 0, 255),
-                                            2,
-                                        )
-                                        if now - cam["last_alert_time"] > ALERT_COOLDOWN:
-                                            trigger_incident(
-                                                camera_id,
-                                                cam["name"],
-                                                "specialized_model_candidate",
-                                                f"Specialized activity model produced class '{class_name}'.",
-                                                float(confidence),
-                                                frame,
-                                                now,
-                                                {
-                                                    "class_name": class_name,
-                                                    "confidence": float(confidence),
-                                                },
-                                            )
-                                            cam["last_alert_time"] = now
-                            else:
-                                # Upstream-compatible COCO classes used only as a weak interaction signal.
-                                target_classes = {
-                                    24, 25, 26, 28, 39, 40, 41, 42, 43,
-                                    67, 73, 74, 75, 76, 77, 78, 79,
-                                }
-                                for box, cls_id, confidence in zip(boxes, classes, confidences):
-                                    if int(cls_id) in target_classes:
-                                        detected_objects.append(box)
-                                        label = f"ITEM {model_obj.names[int(cls_id)]} {confidence:.2f}"
-                                        cv2.rectangle(frame, tuple(box[:2]), tuple(box[2:]), (0, 165, 255), 2)
-                                        cv2.putText(
-                                            frame,
-                                            label,
-                                            (int(box[0]), max(20, int(box[1]) - 5)),
-                                            cv2.FONT_HERSHEY_SIMPLEX,
-                                            0.45,
-                                            (0, 165, 255),
-                                            1,
-                                        )
-                                cam["last_objects"] = detected_objects
-
-                    if pose_results and pose_results[0].boxes.id is not None:
-                        person_boxes = pose_results[0].boxes.xyxy.cpu().numpy().astype(int)
-                        track_ids = pose_results[0].boxes.id.cpu().numpy().astype(int)
-                        keypoints_all = (
-                            pose_results[0].keypoints.xy.cpu().numpy()
-                            if pose_results[0].keypoints is not None
-                            else []
-                        )
-
-                        for idx, track_id in enumerate(track_ids):
-                            box = person_boxes[idx]
-                            keypoints = (
-                                keypoints_all[idx]
-                                if len(keypoints_all) > idx
-                                else np.empty((0, 2))
-                            )
-                            state_key = (camera_id, int(track_id))
-                            state = person_states.setdefault(state_key, PersonState(int(track_id)))
-                            state.last_seen = now
-
-                            left_has_obj = check_object_in_hand(keypoints, detected_objects, "LEFT")
-                            right_has_obj = check_object_in_hand(keypoints, detected_objects, "RIGHT")
-                            current_holding = left_has_obj or right_has_obj
-                            holding_hand = "LEFT" if left_has_obj else "RIGHT" if right_has_obj else None
-
-                            if current_holding:
-                                state.holding_object = True
-                                state.holding_hand = holding_hand
-                                state.last_holding_time = now
-                                cv2.putText(
-                                    frame,
-                                    f"ITEM INTERACTION ({holding_hand})",
-                                    (int(box[0]), max(20, int(box[1]) - 55)),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.55,
-                                    (255, 255, 0),
-                                    2,
-                                )
-
-                            if state.holding_object and not current_holding:
-                                age = now - state.last_holding_time
-                                if (
-                                    age < 3.0
-                                    and state.holding_hand
-                                    and check_concealment(keypoints, state.holding_hand)
-                                ):
-                                    cv2.rectangle(frame, tuple(box[:2]), tuple(box[2:]), (0, 0, 255), 3)
-                                    cv2.putText(
-                                        frame,
-                                        "SUSPECTED CONCEALMENT - REVIEW",
-                                        (int(box[0]), max(20, int(box[1]) - 80)),
-                                        cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.65,
-                                        (0, 0, 255),
-                                        2,
-                                    )
-                                    if now - cam["last_alert_time"] > ALERT_COOLDOWN:
-                                        trigger_incident(
-                                            camera_id,
-                                            cam["name"],
-                                            "suspected_concealment",
-                                            (
-                                                "An item interaction was followed by hand movement "
-                                                "near the hip/waist region. Human review required."
-                                            ),
-                                            0.72,
-                                            frame,
-                                            now,
-                                            {
-                                                "track_id": int(track_id),
-                                                "hand": state.holding_hand,
-                                                "heuristic": "upstream_item_disappearance_plus_hip_proximity",
-                                            },
-                                        )
-                                        cam["last_alert_time"] = now
-                                    state.holding_object = False
-                                    state.holding_hand = None
-                                elif age >= 3.0:
-                                    state.holding_object = False
-                                    state.holding_hand = None
-
-                            roi = cam.get("roi_points", [])
-                            reaching, _ = check_reaching(keypoints, roi)
-                            if reaching:
-                                cv2.putText(
-                                    frame,
-                                    "ROI INTERACTION",
-                                    (int(box[0]), max(20, int(box[1]) - 30)),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.55,
-                                    (0, 0, 255),
-                                    2,
-                                )
-
-                            center_x = int((box[0] + box[2]) / 2)
-                            center_y = int((box[1] + box[3]) / 2)
-                            inside = (
-                                len(roi) >= 3
-                                and cv2.pointPolygonTest(
-                                    np.array(roi, dtype=np.int32),
-                                    (center_x, center_y),
-                                    False,
-                                ) >= 0
-                            )
-                            if inside:
-                                entry_times: dict[int, float] = cam["roi_entry_times"]
-                                entry_times.setdefault(int(track_id), now)
-                                dwell = now - entry_times[int(track_id)]
-                                if dwell >= LOITERING_THRESHOLD:
-                                    cv2.putText(
-                                        frame,
-                                        f"DWELL {dwell:.1f}s",
-                                        (int(box[0]), int(box[3]) + 20),
-                                        cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.5,
-                                        (0, 165, 255),
-                                        2,
-                                    )
-                            else:
-                                cam["roi_entry_times"].pop(int(track_id), None)
-
-                            if check_bending(keypoints):
-                                cv2.putText(
-                                    frame,
-                                    "BENDING",
-                                    (int(box[0]), int(box[3]) + 40),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.45,
-                                    (255, 0, 0),
-                                    1,
-                                )
-
-                    roi = cam.get("roi_points", [])
-                    if roi:
-                        cv2.polylines(frame, [np.array(roi, dtype=np.int32)], True, (0, 255, 255), 2)
-                    encode_frame = frame
-
-                ok, buffer = cv2.imencode(
-                    ".jpg",
-                    encode_frame,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY],
-                )
-                if ok:
-                    frames_payload.append(
-                        {
-                            "camera_id": camera_id,
-                            "name": cam["name"],
-                            "data": base64.b64encode(buffer).decode("ascii"),
-                        }
-                    )
-
-            stale_before = now - 60
-            for key in [k for k, state in person_states.items() if state.last_seen < stale_before]:
-                person_states.pop(key, None)
+                context = cam["tracking"]
+                with context.lock:
+                    if context.closed:
+                        continue
+                    if now - cam["last_inference_at"] < 1 / max(0.1, cam["inference_fps"]):
+                        cached = cam.get("preview")
+                        if cached:
+                            frames_payload.append(cached)
+                        continue
+                    if cap.healthy() and cap.sequence == cam["last_sequence"]:
+                        cached = cam.get("preview")
+                        if cached:
+                            frames_payload.append(cached)
+                        continue
+                    cam["last_inference_at"] = now
+                    cam["inference_count"] = cam.get("inference_count", 0) + 1
+                    run_obj = not cam["last_objects"] or cam["inference_count"] % OBJECT_INFERENCE_EVERY_N_FRAMES == 0
+                    payload = process_camera(camera_id, cam, now, run_obj, no_signal)
+                    if payload:
+                        cam["preview"] = payload
+                        frames_payload.append(payload)
 
             frame_count += 1
-            if frames_payload:
-                with latest_frame_lock:
-                    latest_frame = {"type": "multi_frame", "cameras": frames_payload}
+            with latest_frame_lock:
+                latest_frame = {"type": "multi_frame", "cameras": frames_payload}
             time.sleep(0.03)
         except Exception as exc:
             print(f"Video loop error: {redact(str(exc))}")
@@ -773,6 +727,17 @@ def video_loop() -> None:
 
 
 app = FastAPI(title=APP_NAME, version="0.2.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request, exc):
+    # Pydantic's default response embeds the submitted input, including secrets.
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": error["loc"], "type": error["type"], "msg": "Invalid request value"}
+        for error in exc.errors()
+    ]})
+
+
 app.mount("/alerts", StaticFiles(directory=str(ALERT_DIR)), name="alerts")
 app.mount("/incident-media", StaticFiles(directory=str(INCIDENT_DIR)), name="incident-media")
 app.add_middleware(
@@ -800,7 +765,8 @@ def health() -> dict[str, Any]:
             "post_event_seconds": POST_EVENT_SECONDS,
             "sample_fps": RECORDING_FPS,
         },
-        "tracker_isolation_qualified": False,
+        "tracker_architecture": "shared_pose_inference_per_camera_bytetrack",
+        "tracker_isolation_qualified": False,  # real multi-camera qualification pending
     }
 
 
@@ -888,9 +854,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    video_stop.clear()
     thread = threading.Thread(target=video_loop, daemon=True)
     thread.start()
     yield
+    video_stop.set()
+    thread.join(timeout=30)
     camera_manager.shutdown()
 
 

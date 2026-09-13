@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -22,7 +23,11 @@ class SecretStore:
 
         key = Fernet.generate_key()
         self.key_file.parent.mkdir(parents=True, exist_ok=True)
-        self.key_file.write_bytes(key)
+        try:
+            with self.key_file.open("xb") as stream:
+                stream.write(key)
+        except FileExistsError:
+            return Fernet(self.key_file.read_bytes().strip())
         try:
             os.chmod(self.key_file, 0o600)
         except OSError:
@@ -44,14 +49,22 @@ class SecretStore:
 
 
 def clean_camera_url(url: str) -> str:
+    if any(character.isspace() or ord(character) < 32 for character in url):
+        raise ValueError("Camera URL must not contain whitespace or control characters")
     parts = urlsplit(url)
+    if parts.scheme.lower() not in {"rtsp", "rtsps", "http", "https"}:
+        raise ValueError("Camera URL uses an unsupported scheme")
+    if parts.fragment:
+        raise ValueError("Camera URL must not contain a fragment")
     hostname = parts.hostname or ""
     if not hostname:
         raise ValueError("Camera URL must include a hostname or IP address")
     host = hostname
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    if parts.port:
+    if parts.port is not None:
+        if parts.port == 0:
+            raise ValueError("Camera URL port must be between 1 and 65535")
         host = f"{host}:{parts.port}"
     return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
 
@@ -63,7 +76,7 @@ def build_runtime_url(url: str, username: str = "", password: str = "") -> str:
     clean = urlsplit(clean_camera_url(url))
     host = clean.netloc
     auth = ""
-    if username:
+    if username or password:
         auth = quote(username, safe="")
         if password:
             auth += f":{quote(password, safe='')}"
@@ -77,7 +90,7 @@ def masked_camera_url(url: str, username: str = "", has_password: bool = False) 
     except Exception:
         return "<invalid-camera-url>"
     auth = ""
-    if username:
+    if username or has_password:
         auth = quote(username, safe="")
         if has_password:
             auth += ":********"
@@ -87,7 +100,10 @@ def masked_camera_url(url: str, username: str = "", has_password: bool = False) 
 
 def redact(message: str, secrets: list[str] | None = None) -> str:
     result = str(message)
+    result = re.sub(r"(?i)((?:rtsp|rtsps|https?)://)[^\s/]+@", r"\1********@", result)
     for secret in secrets or []:
         if secret:
-            result = result.replace(secret, "********")
+            for representation in {secret, quote(secret, safe=""), unquote(secret)}:
+                if representation:
+                    result = result.replace(representation, "********")
     return result
