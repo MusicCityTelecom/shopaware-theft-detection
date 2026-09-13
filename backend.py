@@ -672,6 +672,12 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
 video_stop = threading.Event()
 
 
+def maintenance_loop() -> None:
+    while not video_stop.wait(0.5):
+        for _, cam in camera_manager.get_runtime_items():
+            cam["recorder"].expire()
+
+
 def video_loop() -> None:
     global latest_frame
     try:
@@ -857,8 +863,11 @@ async def lifespan(_: FastAPI):
     video_stop.clear()
     thread = threading.Thread(target=video_loop, daemon=True)
     thread.start()
+    maintenance = threading.Thread(target=maintenance_loop, daemon=True, name="maintenance")
+    maintenance.start()
     yield
     video_stop.set()
+    maintenance.join(timeout=5)
     thread.join(timeout=30)
     camera_manager.shutdown()
 
