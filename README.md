@@ -13,10 +13,28 @@ Current defaults:
 - Detection: `yolo26n.pt`
 - Pose/keypoints: `yolo26n-pose.pt`
 - Optional specialized activity model: `shoplifting.pt` when present
+- Ultralytics runtime pinned in `requirements.txt`
 
-The backend currently includes FastAPI/WebSocket transport, reconnecting multi-camera RTSP workers, encrypted camera passwords, masked RTSP URLs, YOLO26 model configuration, upstream-compatible concealment heuristics, SQLite incident persistence, snapshot capture, SMTP alert plumbing, Docker bootstrap, and unit-test/CI scaffolding.
+The current bootstrap includes:
 
-Incident video clips, authentication, the adapted Next.js dashboard, richer zone types, and live model qualification are the next major milestones.
+- FastAPI API and WebSocket live previews
+- reconnecting multi-camera RTSP workers
+- separate RTSP URL / username / encrypted password storage
+- masked camera URLs in normal API responses
+- configurable YOLO26 detection and pose model paths
+- upstream-compatible item/hand/hip concealment signals with conservative incident language
+- SQLite camera and incident persistence
+- annotated incident snapshots
+- rolling pre-event frame buffers
+- configurable post-event recording continuation
+- asynchronous MP4 evidence-clip finalization
+- incident review states and browser playback
+- SMTP alert plumbing
+- adapted Next.js ShopAware dashboard
+- Docker / Docker Compose bootstrap
+- unit-test and GitHub Actions scaffolding
+
+Authentication, richer zone types, retention/disk quotas, tracker-isolation qualification, and live YOLO26 hardware qualification remain before production use.
 
 ## Quick development start
 
@@ -29,7 +47,19 @@ pytest -q
 uvicorn backend:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Then open FastAPI docs at `http://127.0.0.1:8000/docs`.
+In another shell:
+
+```bash
+cd dashboard
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+Default URLs:
+
+- API/docs: `http://127.0.0.1:8000/docs`
+- Dashboard: `http://127.0.0.1:3000`
 
 The standard YOLO26 checkpoints are intentionally not committed to this repository. Ultralytics can resolve/download them at runtime, or operators can configure alternate model paths through environment variables.
 
@@ -47,6 +77,20 @@ Add an RTSP camera with credentials separated from the URL:
 ```
 
 Passwords are encrypted at rest. Normal camera-list responses return a masked stream representation rather than the decrypted password.
+
+## Incident evidence
+
+Each enabled camera maintains a bounded sampled pre-event buffer. When an incident candidate is created, ShopAware seeds a clip from the preceding buffer and continues collecting frames for a configurable post-event window.
+
+Default development values:
+
+- 15 seconds pre-event
+- 30 seconds post-event
+- 6 evidence frames/second
+
+The alert snapshot is annotated with the AI trigger context. The evidence clip is buffered from the original camera frames before ShopAware draws overlays.
+
+The first implementation writes an MP4 using OpenCV's portable `mp4v` path. FFmpeg/H.264/H.265 output and codec qualification remain deployment work.
 
 ## Detection model
 
@@ -71,7 +115,7 @@ Browser / Dashboard
         v
 FastAPI API + WebSocket
         |
-        +--> Camera manager --> RTSP workers --> rolling frame pipeline
+        +--> Camera manager --> RTSP workers --> rolling evidence buffers
         |                           |
         |                           +--> YOLO26 detection
         |                           +--> YOLO26 pose/tracking
@@ -82,12 +126,19 @@ FastAPI API + WebSocket
         |                                      |
         +--> SQLite incidents <---------------+
         |        |
-        |        +--> snapshot / clip evidence
+        |        +--> annotated snapshot
+        |        +--> pre/post-event MP4
         |        +--> review status
         |
         +--> SMTP alert provider
                  +--> SMS provider later
 ```
+
+## Known qualification blocker: multi-camera tracker state
+
+The application currently keeps its own behavioral state under `(camera_id, track_id)`, but that alone does not prove that one Ultralytics `persist=True` tracker instance is internally isolated across sequential frames from different cameras.
+
+Issue #3 tracks this explicitly. Multi-camera tracking must not be described as production-qualified until independent tracker state is proven or implemented per camera.
 
 ## Security requirements
 
@@ -97,6 +148,7 @@ FastAPI API + WebSocket
 - Keep runtime encryption keys outside Git.
 - Store incident media outside frontend static assets in production.
 - Add application authentication before exposing ShopAware outside a trusted development network.
+- Replace the current development static-media mounts with authenticated evidence routes before production exposure.
 
 ## Upstream attribution and licensing
 
@@ -117,13 +169,16 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 - [x] SMTP alert plumbing
 - [x] Docker bootstrap
 - [x] unit-test/CI bootstrap
-- [ ] import/adapt Next.js dashboard
+- [x] adapt Next.js dashboard
 - [ ] live YOLO26 regression qualification
+- [ ] prove/fix per-camera tracker isolation (#3)
 
 ### Incident evidence
-- [ ] rolling pre-event buffer
-- [ ] post-event continuation
-- [ ] MP4/H.264 incident clips
+- [x] rolling pre-event buffer
+- [x] post-event continuation
+- [x] prototype MP4 incident clips
+- [x] dashboard clip playback
+- [ ] FFmpeg/H.264/H.265 deployment encoder
 - [ ] retention/disk quota
 - [ ] authenticated evidence routes
 
