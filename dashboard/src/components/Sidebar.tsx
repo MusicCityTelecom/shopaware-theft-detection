@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Camera, History, LayoutDashboard, Settings, ShieldCheck } from "lucide-react";
+import { Camera, History, LayoutDashboard, Settings, ShieldCheck, GraduationCap } from "lucide-react";
 
 const links = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/cameras", label: "Cameras", icon: Camera },
   { href: "/history", label: "Incidents", icon: History },
+  { href: "/training", label: "Training", icon: GraduationCap },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

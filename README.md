@@ -40,6 +40,11 @@ writers, provider-based SMTP, schema migrations, retention/quota management and
 editable runtime settings. See [deployment/setup and exact remaining limits](docs/DEPLOYMENT.md).
 Real cameras, model checkpoints and hardware still require qualification.
 
+The dashboard now includes **Training**, with a **Train with this camera** shortcut.
+Capture examples from a selected camera, draw object boxes, review labels and export
+a YOLO dataset. A separate command checks, trains and evaluates a new detector;
+activation remains explicit. See [the camera training guide](docs/TRAINING.md).
+
 ## Quick development start
 
 ```bash
@@ -195,7 +200,7 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 - [x] candidate deduplication
 - [ ] per-camera thresholds
 - [ ] YOLO26n/s/m benchmarking
-- [ ] retail dataset/annotation workflow
+- [x] camera-selected capture, annotation and dataset export workflow
 - [ ] ShopAware-specific trained model
 
 ### Production hardening

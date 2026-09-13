@@ -5,6 +5,7 @@ import { apiBase, apiFetch as fetch } from "@/lib/api";
 import { FormEvent, useEffect, useState } from "react";
 import { Camera, Plus, RefreshCw, Trash2 } from "lucide-react";
 import ZoneEditor from "@/components/ZoneEditor";
+import Link from "next/link";
 
 type CameraRow = {
   id: string;
@@ -162,6 +163,7 @@ export default function CamerasPage() {
                       <button className="btn btn-secondary" onClick={() => cameraAction(camera, "enabled")}>{camera.enabled ? "Disable" : "Enable"}</button>
                       <button className="btn btn-secondary" onClick={() => cameraAction(camera, "test")}>Test connection</button>
                       <button className="btn btn-secondary" onClick={() => setZoneCamera(zoneCamera === camera.id ? null : camera.id)}>Zones</button>
+                      <Link className="btn btn-secondary" href={`/training?camera=${encodeURIComponent(camera.id)}`}>Train with this camera</Link>
                     </div>
                     {zoneCamera === camera.id && <ZoneEditor cameraId={camera.id} />}
                   </div>
