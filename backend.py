@@ -4,7 +4,6 @@ import asyncio
 import base64
 import json
 import os
-import smtplib
 import secrets as token_secrets
 import threading
 import time
@@ -12,12 +11,8 @@ import uuid
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from email.mime.image import MIMEImage
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 # Suppress native codec diagnostics that can include credential-bearing URIs.
 os.environ.setdefault('OPENCV_LOG_LEVEL', 'SILENT')
@@ -32,7 +27,6 @@ from fastapi import Request, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse, Response
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 from ultralytics import YOLO
 
