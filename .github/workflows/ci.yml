@@ -18,3 +18,25 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Run unit tests
         run: pytest -q
+        env:
+          YOLO_AUTOINSTALL: "false"
+          YOLO_CONFIG_DIR: ${{ runner.temp }}/ultralytics
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11.19.0"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"

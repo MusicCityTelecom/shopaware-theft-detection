@@ -1,0 +1,35 @@
+name: Optional YOLO26 CPU qualification
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: HTTPS URL of authorized representative imagery with a visible person
+        required: true
+        type: string
+jobs:
+  qualify-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements.txt
+      - name: Download authorized qualification image
+        env:
+          QUALIFICATION_IMAGE_URL: ${{ inputs.image_url }}
+        run: |
+          python - <<'PY'
+          import os, urllib.request
+          from urllib.parse import urlsplit
+          url = os.environ['QUALIFICATION_IMAGE_URL']
+          if urlsplit(url).scheme != 'https':
+              raise SystemExit('HTTPS imagery required')
+          urllib.request.urlretrieve(url, 'qualification-input.jpg')
+          PY
+      - run: python -m tools.qualify_models --image qualification-input.jpg --device cpu --output qualification.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpu-qualification-measurements
+          path: qualification.json

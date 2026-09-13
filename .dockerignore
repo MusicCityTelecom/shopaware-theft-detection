@@ -1,0 +1,14 @@
+.git
+.venv
+.research
+.pnpm-store
+dashboard/node_modules
+dashboard/.next
+.env
+*.log
+*.db
+*.key
+*.pt
+data
+alerts
+incidents

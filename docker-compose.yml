@@ -6,9 +6,18 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/app/data
       - ./alerts:/app/alerts
       - ./incidents:/app/incidents
       - ./models:/app/models
+  dashboard:
+    build: ./dashboard
+    restart: unless-stopped
+    environment:
+      SHOPAWARE_BACKEND_URL: http://shopaware:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - shopaware

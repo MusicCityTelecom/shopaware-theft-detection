@@ -34,7 +34,11 @@ The current bootstrap includes:
 - Docker / Docker Compose bootstrap
 - unit-test and GitHub Actions scaffolding
 
-Authentication, richer zone types, retention/disk quotas, tracker-isolation qualification, and live YOLO26 hardware qualification remain before production use.
+The branch now adds per-camera ByteTrack isolation, local admin authentication,
+protected evidence, typed normalized zones, heuristic risk scoring, bounded media
+writers, provider-based SMTP, schema migrations, retention/quota management and
+editable runtime settings. See [deployment/setup and exact remaining limits](docs/DEPLOYMENT.md).
+Real cameras, model checkpoints and hardware still require qualification.
 
 ## Quick development start
 
@@ -44,6 +48,8 @@ source .venv/bin/activate   # Windows: .venv\\Scripts\\activate
 pip install -r requirements-dev.txt
 cp .env.example .env
 pytest -q
+# Configure local HTTP cookie setting as documented in docs/DEPLOYMENT.md
+python -m shopaware.auth
 uvicorn backend:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -52,8 +58,8 @@ In another shell:
 ```bash
 cd dashboard
 cp .env.example .env.local
-npm install
-npm run dev
+corepack pnpm install --frozen-lockfile
+corepack pnpm dev
 ```
 
 Default URLs:
@@ -147,8 +153,8 @@ Issue #3 remains open for real two-camera/model and hardware qualification. Synt
 - Redact secrets from API responses and exception messages.
 - Keep runtime encryption keys outside Git.
 - Store incident media outside frontend static assets in production.
-- Add application authentication before exposing ShopAware outside a trusted development network.
-- Replace the current development static-media mounts with authenticated evidence routes before production exposure.
+- Admin sessions protect API, WebSocket preview and incident media. Configure HTTPS, trusted origins and secure cookies as described in the deployment guide.
+- Evidence is served by incident ID through authenticated routes with media-root containment checks.
 
 ## Upstream attribution and licensing
 
@@ -171,7 +177,8 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 - [x] unit-test/CI bootstrap
 - [x] adapt Next.js dashboard
 - [ ] live YOLO26 regression qualification
-- [ ] prove/fix per-camera tracker isolation (#3)
+- [x] isolate per-camera tracker state in code and synthetic regression tests
+- [ ] real two-camera qualification (#3)
 
 ### Incident evidence
 - [x] rolling pre-event buffer
@@ -179,23 +186,24 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 - [x] prototype MP4 incident clips
 - [x] dashboard clip playback
 - [ ] FFmpeg/H.264/H.265 deployment encoder
-- [ ] retention/disk quota
-- [ ] authenticated evidence routes
+- [x] retention/disk quota
+- [x] authenticated evidence routes
 
 ### Detection quality
-- [ ] merchandise / restricted / checkout / exit zone types
-- [ ] scored multi-signal incidents
-- [ ] candidate deduplication
+- [x] merchandise / restricted / checkout / exit zone types
+- [x] scored multi-signal incidents
+- [x] candidate deduplication
 - [ ] per-camera thresholds
 - [ ] YOLO26n/s/m benchmarking
 - [ ] retail dataset/annotation workflow
 - [ ] ShopAware-specific trained model
 
 ### Production hardening
-- [ ] authentication and roles
+- [x] local admin authentication
+- [ ] additional operator roles
 - [ ] audit trail
 - [ ] production reverse proxy/TLS
-- [ ] GPU deployment profiles
+- [x] documented GPU Docker override (unexecuted here)
 - [ ] SMS alert provider
 - [ ] backup/restore
 
