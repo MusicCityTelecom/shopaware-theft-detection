@@ -194,3 +194,40 @@ def test_zone_crud_preserves_camera_and_cascades_on_deletion(api):
         assert conn.execute('SELECT COUNT(*) FROM zones').fetchone()[0]==0
     finally:
         conn.close()
+
+
+def test_training_api_auth_capture_annotation_export_and_stale_frames(api):
+    import time
+    import numpy as np
+    client, backend = api
+    stranger = TestClient(backend.app)
+    for path in ['/training?camera_id=a', '/training/export?camera_id=a', '/training/samples/a/image']:
+        assert stranger.get(path).status_code == 401
+    csrf = client.headers.pop('x-csrf-token')
+    assert client.post('/training/sessions', json={}).status_code == 403
+    client.headers['x-csrf-token'] = csrf
+    camera = client.post('/cameras', json=dict(name='Training test', rtsp_url='rtsp://host/live', enabled=False)).json()['camera']
+    cid = camera['id']
+    session = client.post('/training/sessions', json=dict(camera_id=cid, name='Morning', split='train')).json()['id']
+    assert client.post(f'/training/sessions/{session}/capture').status_code == 503
+
+    class Capture:
+        stale = False
+        def snapshot(self): return True, np.zeros((100, 200, 3), np.uint8), 1, 1, time.time() - (30 if self.stale else 0)
+        def release(self): pass
+    cap = Capture()
+    backend.camera_manager.cameras[cid]['cap'] = cap
+    response = client.post(f'/training/sessions/{session}/capture')
+    assert response.status_code == 201
+    sample = response.json()['id']
+    image = client.get(f'/training/samples/{sample}/image')
+    assert image.status_code == 200 and image.headers['cache-control'] == 'no-store'
+    assert client.put(f'/training/samples/{sample}', json=dict(boxes=[], reviewed=False)).status_code == 422
+    assert client.put(f'/training/samples/{sample}', json=dict(boxes=[], reviewed=True)).status_code == 200
+    overview = client.get('/training', params={'camera_id':cid}).json()
+    assert overview['samples'][0]['reviewer'] == 'test-admin'
+    assert client.get('/training/export', params={'camera_id':cid}).status_code == 409
+    cap.stale = True
+    assert client.post(f'/training/sessions/{session}/capture').status_code == 503
+    assert client.delete(f'/training/sessions/{session}').status_code == 200
+    assert client.get(f'/training/samples/{sample}/image').status_code == 404

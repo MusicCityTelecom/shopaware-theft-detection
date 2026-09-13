@@ -58,7 +58,8 @@ def test_unversioned_baseline_database_upgrade_preserves_existing_rows(tmp_path)
     assert db.incident('i')['snapshot_path'] == 'snapshot.jpg'
     conn = db.connect()
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 2
+        from shopaware.migrations import MIGRATIONS
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == max(MIGRATIONS)
         assert conn.execute('PRAGMA foreign_key_check').fetchall() == []
     finally:
         conn.close()

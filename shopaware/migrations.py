@@ -17,6 +17,12 @@ MIGRATIONS = {
         "CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)",
     ],
     2: ["ALTER TABLE incidents ADD COLUMN alert_status TEXT NOT NULL DEFAULT 'not_dispatched'"],
+    3: [
+        "CREATE TABLE training_sessions (id TEXT PRIMARY KEY, camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE, name TEXT NOT NULL, split TEXT NOT NULL CHECK(split IN ('train','val','test')), created_at TEXT NOT NULL)",
+        "CREATE INDEX idx_training_sessions_camera ON training_sessions(camera_id)",
+        "CREATE TABLE training_samples (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES training_sessions(id) ON DELETE CASCADE, camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE, captured_at REAL NOT NULL, jpeg BLOB NOT NULL, digest TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, boxes_json TEXT NOT NULL DEFAULT '[]', reviewed INTEGER NOT NULL DEFAULT 0, reviewer TEXT, reviewed_at TEXT, UNIQUE(camera_id,digest))",
+        "CREATE INDEX idx_training_samples_session ON training_samples(session_id)",
+    ],
 }
 
 

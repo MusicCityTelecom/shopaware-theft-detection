@@ -20,6 +20,10 @@ settings.json
 error_log.txt
 
 # Model artifacts
+/training-data/
+/runs/
+*.db-wal
+*.db-shm
 models/*.pt
 *.pt
 *.onnx

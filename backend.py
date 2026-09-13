@@ -35,6 +35,7 @@ from shopaware.tracking import CameraTrackingContext
 from shopaware.alerts.base import AlertEvent, AlertDispatcher
 from shopaware.alerts.smtp import SMTPProvider
 from shopaware.settings import SettingsStore, SettingsInput
+from shopaware.training_api import training_router
 from shopaware.storage import RetentionManager
 from shopaware.zones import Zone
 from shopaware.risk import RiskEngine
@@ -998,6 +999,21 @@ def enable_camera(camera_id: str, payload: EnabledInput):
         with camera_manager.lock:
             camera_manager.cameras[camera_id] = camera_manager._row_to_runtime(row)
     return {'enabled': payload.enabled}
+
+
+def training_frame(camera_id: str):
+    with camera_manager.lock:
+        camera = camera_manager.cameras.get(camera_id)
+        cap = camera.get('cap') if camera else None
+    if cap is None:
+        raise HTTPException(503, 'Enable the camera and wait for a live frame before capturing.')
+    ok, frame, _, _, captured_at = cap.snapshot()
+    if not ok or frame is None or not captured_at or time.time() - captured_at > 10:
+        raise HTTPException(503, 'Camera frame is unavailable or stale. Wait for the stream to reconnect.')
+    return frame, captured_at
+
+
+app.include_router(training_router(lambda: database, training_frame))
 
 
 @app.get('/cameras/{camera_id}/frame')
