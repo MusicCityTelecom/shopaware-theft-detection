@@ -1,0 +1,32 @@
+services:
+  shopaware:
+    build: .
+    container_name: shopaware
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SHOPAWARE_DB_PATH: /app/data/shopaware.db
+      SHOPAWARE_KEY_FILE: /app/data/.shopaware.key
+      SHOPAWARE_ALERT_DIR: /app/alerts
+      SHOPAWARE_INCIDENT_DIR: /app/incidents
+      SHOPAWARE_MODEL_DIR: /app/models
+      SHOPAWARE_MEDIA_WRITER: ffmpeg
+    init: true
+    stop_grace_period: 150s
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./alerts:/app/alerts
+      - ./incidents:/app/incidents
+      - ./models:/app/models
+  dashboard:
+    build: ./dashboard
+    restart: unless-stopped
+    environment:
+      SHOPAWARE_BACKEND_URL: http://shopaware:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - shopaware

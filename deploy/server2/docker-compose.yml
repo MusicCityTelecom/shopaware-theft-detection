@@ -1,0 +1,59 @@
+name: shopaware-server2
+
+services:
+  shopaware:
+    build:
+      context: ../..
+      args:
+        TORCH_INDEX_URL: ${SHOPAWARE_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    image: shopaware/backend:0.1.0-beta.3
+    container_name: shopaware-backend
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ../../.env
+    environment:
+      SHOPAWARE_DB_PATH: /app/data/shopaware.db
+      SHOPAWARE_KEY_FILE: /app/data/.shopaware.key
+      SHOPAWARE_ALERT_DIR: /app/alerts
+      SHOPAWARE_INCIDENT_DIR: /app/incidents
+      SHOPAWARE_MODEL_DIR: /app/models
+      SHOPAWARE_MEDIA_WRITER: ffmpeg
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      YOLO_CONFIG_DIR: /app/data/ultralytics
+    ports:
+      - "127.0.0.1:${SHOPAWARE_BACKEND_PORT:-18082}:8000"
+    volumes:
+      - /var/lib/shopaware/data:/app/data
+      - /var/lib/shopaware/alerts:/app/alerts
+      - /var/lib/shopaware/incidents:/app/incidents
+      - /var/lib/shopaware/models:/app/models
+      - /var/lib/shopaware/training:/app/training-data
+      - /var/lib/shopaware/runs:/app/runs
+    stop_grace_period: 150s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  dashboard:
+    build:
+      context: ../../dashboard
+    image: shopaware/dashboard:0.1.0-beta.3
+    container_name: shopaware-dashboard
+    restart: unless-stopped
+    init: true
+    environment:
+      SHOPAWARE_BACKEND_URL: http://shopaware:8000
+    ports:
+      - "127.0.0.1:${SHOPAWARE_DASHBOARD_PORT:-18081}:3000"
+    depends_on:
+      shopaware:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
