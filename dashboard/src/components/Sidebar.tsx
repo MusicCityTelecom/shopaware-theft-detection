@@ -2,18 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Camera, History, LayoutDashboard, Settings, ShieldCheck, GraduationCap } from "lucide-react";
+import { Camera, History, LayoutDashboard, Settings, ShieldCheck, GraduationCap, Users, Building2, KeyRound } from "lucide-react";
+
+import { useSession } from "./AuthGate";
 
 const links = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/cameras", label: "Cameras", icon: Camera },
   { href: "/history", label: "Incidents", icon: History },
-  { href: "/training", label: "Training", icon: GraduationCap },
+  { href: "/training", label: "Training", icon: GraduationCap, Users, Building2, KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/groups", label: "Customers", icon: Building2 },
+  { href: "/users", label: "Users", icon: Users },
+  { href: "/account", label: "My account", icon: KeyRound },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const isAdmin = useSession()?.role === "admin";
 
   return (
     <aside className="w-64 glass-panel border-l-0 rounded-l-none min-h-screen flex flex-col p-4 max-[900px]:w-full max-[900px]:min-h-0 max-[900px]:rounded-none">
@@ -28,7 +34,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-2 max-[900px]:flex max-[900px]:gap-2 max-[900px]:space-y-0 max-[900px]:overflow-x-auto">
-        {links.map((link) => {
+        {links.filter(link => isAdmin || !["/training", "/settings", "/users", "/groups"].includes(link.href)).map((link) => {
           const Icon = link.icon;
           const active = pathname === link.href;
           return (

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import RouteAccess from "@/components/RouteAccess";
 import AuthGate from "@/components/AuthGate";
 
 
@@ -14,7 +15,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en">
       <body className="antialiased flex">
         <AuthGate><Sidebar />
-        <main className="flex-1 p-6 min-h-screen overflow-y-auto">{children}</main></AuthGate>
+        <main className="flex-1 p-6 min-h-screen overflow-y-auto"><RouteAccess>{children}</RouteAccess></main></AuthGate>
       </body>
     </html>
   );

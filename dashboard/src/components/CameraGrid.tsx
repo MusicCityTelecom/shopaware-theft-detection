@@ -3,10 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Camera, WifiOff } from "lucide-react";
 
-type FrameItem = { camera_id: string; name: string; data: string };
+import { apiJson, CustomerGroup } from "@/lib/admin";
+
+type FrameItem = { group_id?: string | null; camera_id: string; name: string; data: string };
 type MultiFrame = { type: "multi_frame"; cameras: FrameItem[] };
 
 export default function CameraGrid() {
+  const [groups, setGroups] = useState<CustomerGroup[]>([]);
+  const [group, setGroup] = useState("");
+  useEffect(() => { apiJson<CustomerGroup[]>("/groups").then(setGroups).catch(() => setGroups([])); }, []);
   const [frames, setFrames] = useState<Record<string, FrameItem>>({});
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
@@ -55,6 +60,7 @@ export default function CameraGrid() {
         socket.onerror = () => setError("Live stream connection error.");
         socket.onclose = () => {
           setConnected(false);
+          setFrames({});
           if (!stopped) reconnectTimer.current = setTimeout(connect, 2500);
         };
       } catch {
@@ -71,10 +77,11 @@ export default function CameraGrid() {
     };
   }, [wsUrl]);
 
-  const items = Object.values(frames);
+  const items = Object.values(frames).filter(frame => !group || (frame.group_id || "ungrouped") === group);
 
   return (
     <section>
+      <label className="block max-w-md mb-4">Live feed customer<select className="input" value={group} onChange={e => setGroup(e.target.value)}><option value="">All accessible cameras</option><option value="ungrouped">Ungrouped</option>{groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm text-foreground/55">
           {connected ? "Live WebSocket connected" : "Waiting for live connection"}

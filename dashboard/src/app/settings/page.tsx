@@ -75,7 +75,7 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2 mb-4"><SlidersHorizontal className="w-5 h-5 text-brand" /><h3 className="font-semibold">Pending controls</h3></div>
           <ul className="text-sm text-foreground/65 space-y-2 list-disc pl-5">
             <li>per-camera overrides for global inference settings</li>
-            <li>additional operator roles beyond administrator</li>
+            <li>fine-grained permissions beyond administrator and camera user</li>
             <li>SMS alert provider</li>
           </ul>
         </section>

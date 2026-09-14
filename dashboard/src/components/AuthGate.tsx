@@ -1,10 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { createContext, useContext, FormEvent, useEffect, useState } from "react";
 import { apiBase, apiFetch, setCsrf } from "@/lib/api";
 
+export type SessionUser = { id: number; username: string; role: "admin" | "user" };
+const SessionContext = createContext<SessionUser | null>(null);
+export function useSession() { return useContext(SessionContext); }
+
 export default function AuthGate({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<string | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -12,7 +16,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     const reset = () => { setUser(null); setCsrf(""); };
     window.addEventListener("shopaware-auth-required", reset);
     apiFetch(`${apiBase}/auth/session`).then(async response => {
-      if (response.ok) { const session = await response.json(); setCsrf(session.csrf); setUser(session.username); }
+      if (response.ok) { const session = await response.json(); setCsrf(session.csrf); setUser(session); }
     }).catch(() => setError("Unable to reach ShopAware.")).finally(() => setLoading(false));
     return () => window.removeEventListener("shopaware-auth-required", reset);
   }, []);
@@ -28,7 +32,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ username: fields.get("username"), password: fields.get("password") }) });
       if (!response.ok) throw new Error(response.status === 429 ? "Too many attempts. Try again later." : "Login failed.");
       const session = await response.json();
-      setCsrf(session.csrf); setUser(session.username); form.reset();
+      setCsrf(session.csrf); setUser(session); form.reset();
     } catch (e) { setError(e instanceof Error ? e.message : "Login failed."); }
   }
 
@@ -49,7 +53,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       <button className="btn btn-primary" type="submit">Sign in</button>
     </form>
     <p role="alert" className="text-red-300 mt-3">{error}</p>
-    <p className="text-sm mt-5 text-foreground/55">Use the administrator account created during appliance setup.</p>
+    <p className="text-sm mt-5 text-foreground/55">Use the account created by your administrator. Change your password from My account after signing in.</p>
   </div>;
-  return <><div className="fixed right-4 bottom-3 z-50 glass-panel p-2 text-xs">{user} <button className="btn btn-secondary ml-2" onClick={logout}>Log out</button>{error && <p role="alert">{error}</p>}</div>{children}</>;
+  return <SessionContext.Provider value={user}><div className="fixed right-4 bottom-3 z-50 glass-panel p-2 text-xs">{user.username} <button className="btn btn-secondary ml-2" onClick={logout}>Log out</button>{error && <p role="alert">{error}</p>}</div>{children}</SessionContext.Provider>;
 }

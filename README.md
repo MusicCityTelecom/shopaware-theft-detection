@@ -207,7 +207,7 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 
 ### Production hardening
 - [x] local admin authentication
-- [ ] additional operator roles
+- [x] administrator/user roles, customer groups and camera access assignments
 - [ ] audit trail
 - [ ] production reverse proxy/TLS
 - [x] documented GPU Docker override (unexecuted here)
@@ -217,3 +217,7 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 ## Safety / operational note
 
 ShopAware is a loss-prevention decision-support system. Computer-vision detections are probabilistic and can be wrong. A trained human should review incident evidence before taking action.
+
+### Users and customer access
+
+Open **My account** to change your password. Administrators can create **Customers**, assign cameras to them in **Cameras**, and manage accounts and camera/group permissions in **Users**. See [the complete user and customer guide](docs/USERS_AND_CUSTOMERS.md).

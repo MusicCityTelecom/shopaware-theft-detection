@@ -8,6 +8,8 @@ import { CheckCircle2, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 type Incident = {
   id: string;
   camera_id: string;
+  group_id: string | null;
+  group_name: string | null;
   camera_name: string;
   event_type: string;
   message: string;
@@ -25,6 +27,7 @@ type Incident = {
 
 export default function HistoryPage() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [groupFilter, setGroupFilter] = useState("");
   const [filter, setFilter] = useState("needs_review");
   const [error, setError] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -47,8 +50,8 @@ export default function HistoryPage() {
   }, []);
 
   const visible = useMemo(
-    () => incidents.filter((incident) => filter === "all" || incident.review_status === filter),
-    [incidents, filter],
+    () => incidents.filter((incident) => (filter === "all" || incident.review_status === filter) && (!groupFilter || (incident.group_id || "ungrouped") === groupFilter)),
+    [incidents, filter, groupFilter],
   );
 
   const review = async (id: string, status: string) => {
@@ -83,6 +86,7 @@ export default function HistoryPage() {
         </div>
       </header>
 
+      <label className="block mb-5 max-w-md">Incident customer<select className="input" value={groupFilter} onChange={e => setGroupFilter(e.target.value)}><option value="">All accessible incidents</option><option value="ungrouped">Ungrouped</option>{Array.from(new Map(incidents.filter(i => i.group_id).map(i => [i.group_id, i.group_name])).entries()).map(([id, name]) => <option key={id} value={id!}>{name || "Former customer group"}</option>)}</select></label>
       {error && <div className="glass-panel border-red-500/25 text-red-200 p-3 mb-4 text-sm">{error}</div>}
 
       {visible.length === 0 ? (
@@ -118,7 +122,7 @@ export default function HistoryPage() {
                 <div className="p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <div>
-                      <div className="font-semibold">{incident.camera_name}</div>
+                      <div className="font-semibold">{incident.camera_name}</div><p className="text-sm">{incident.group_name || "Ungrouped"}</p>
                       <div className="text-xs text-foreground/45">{new Date(incident.created_at).toLocaleString()}</div>
                     </div>
                     <div className="flex items-center gap-2">

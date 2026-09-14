@@ -6,9 +6,13 @@ import { FormEvent, useEffect, useState } from "react";
 import { Camera, Plus, RefreshCw, Trash2 } from "lucide-react";
 import ZoneEditor from "@/components/ZoneEditor";
 import Link from "next/link";
+import { useSession } from "@/components/AuthGate";
+import { apiJson, CustomerGroup } from "@/lib/admin";
 
 type CameraRow = {
   id: string;
+  group_id: string | null;
+  group_name: string | null;
   name: string;
   rtsp_url: string;
   username: string;
@@ -23,6 +27,17 @@ type CameraRow = {
 
 
 export default function CamerasPage() {
+  const isAdmin = useSession()?.role === "admin";
+  const [groups, setGroups] = useState<CustomerGroup[]>([]);
+  const [groupId, setGroupId] = useState("");
+  const [groupFilter, setGroupFilter] = useState("");
+  async function moveGroup(camera: CameraRow, value: string) {
+    if (!window.confirm("Move this camera to another customer group? Individual user grants will be cleared and earlier incidents will become admin-only. Reassign any needed user access afterward.")) return;
+    try {
+      await apiJson(`/cameras/${camera.id}/group`, { method: "PUT", body: JSON.stringify({ group_id: value || null }) });
+      setMessage("Customer group updated. Review user access for this camera."); await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Group update failed"); }
+  }
   const [cameras, setCameras] = useState<CameraRow[]>([]);
   const [name, setName] = useState("");
   const [rtspUrl, setRtspUrl] = useState("");
@@ -51,6 +66,7 @@ export default function CamerasPage() {
       const response = await fetch(`${apiBase}/cameras`, { cache: "no-store" });
       if (!response.ok) throw new Error(`Camera list failed (${response.status})`);
       setCameras(await response.json());
+      setGroups(await apiJson<CustomerGroup[]>("/groups"));
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load cameras");
@@ -58,7 +74,7 @@ export default function CamerasPage() {
   };
 
   useEffect(() => {
-    const initial = setTimeout(refresh, 0);
+    const initial = setTimeout(() => { setGroupFilter(new URLSearchParams(window.location.search).get("group") || ""); refresh(); }, 0);
     const timer = setInterval(refresh, 8000);
     return () => { clearTimeout(initial); clearInterval(timer); };
   }, []);
@@ -72,7 +88,7 @@ export default function CamerasPage() {
       const response = await fetch(`${apiBase}/cameras`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, rtsp_url: rtspUrl, username, password, enabled: true }),
+        body: JSON.stringify({ name, rtsp_url: rtspUrl, username, password, enabled: true, group_id: groupId || null }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.detail || `Camera add failed (${response.status})`);
@@ -104,13 +120,15 @@ export default function CamerasPage() {
     <div className="max-w-6xl mx-auto pb-10">
       <header className="mb-8">
         <h2 className="text-3xl font-bold tracking-tight mb-2">Cameras</h2>
-        <p className="text-foreground/60">Add RTSP/NVR channels without embedding passwords in the camera URL.</p>
+        <p className="text-foreground/60">{isAdmin ? "Manage camera connections and customer groups." : "Cameras assigned to your account. View their live feeds from Overview."}</p>
       </header>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-6">
-        <section className="glass-panel p-5 h-fit">
+      <label className="block mb-5 max-w-md">Filter by customer<select className="input" value={groupFilter} onChange={e => setGroupFilter(e.target.value)}><option value="">All accessible cameras</option><option value="ungrouped">Ungrouped</option>{groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
+      <div className={`grid grid-cols-1 ${isAdmin ? "xl:grid-cols-[380px_1fr]" : ""} gap-6`}>
+        {isAdmin && <section className="glass-panel p-5 h-fit">
           <div className="flex items-center gap-2 mb-5"><Plus className="w-5 h-5 text-brand" /><h3 className="font-semibold">Add camera</h3></div>
           <form onSubmit={submit} className="space-y-4">
+            <label className="block">Customer group<select className="input" value={groupId} onChange={e => setGroupId(e.target.value)}><option value="">Ungrouped</option>{groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
             <label className="block">
               <span className="block text-xs text-foreground/55 mb-1.5">Camera name</span>
               <input className="input" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Liquor Aisle 1" />
@@ -132,7 +150,7 @@ export default function CamerasPage() {
           <p className="mt-4 text-xs leading-5 text-foreground/45">
             ShopAware strips credentials embedded in the supplied URL, stores the username separately, and encrypts the password at rest.
           </p>
-        </section>
+        </section>}
 
         <section>
           <div className="flex items-center justify-between mb-3">
@@ -143,31 +161,33 @@ export default function CamerasPage() {
           {message && <div className="glass-panel border-green-500/25 text-green-200 p-3 mb-3 text-sm">{message}</div>}
           {error && <div className="glass-panel border-red-500/25 text-red-200 p-3 mb-3 text-sm">{error}</div>}
 
-          {cameras.length === 0 ? (
+          {cameras.filter(c => !groupFilter || (c.group_id || "ungrouped") === groupFilter).length === 0 ? (
             <div className="glass-panel p-10 text-center text-foreground/50"><Camera className="w-9 h-9 mx-auto mb-3" />No cameras configured.</div>
           ) : (
             <div className="space-y-3">
-              {cameras.map((camera) => (
+              {cameras.filter(c => !groupFilter || (c.group_id || "ungrouped") === groupFilter).map((camera) => (
                 <article key={camera.id} className="glass-panel p-4 flex gap-4 items-start justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
                       <div className="font-semibold">{camera.name}</div>
                       <span className={`badge ${camera.status === "active" ? "text-green-400" : "text-amber-300"}`}>{camera.status}</span>
                     </div>
-                    <div className="text-xs font-mono text-foreground/55 break-all">{camera.source}</div>
+                    <p className="text-sm mb-2">{camera.group_name || "Ungrouped"}</p>
+                    {isAdmin && <><div className="text-xs font-mono text-foreground/55 break-all">{camera.source}</div>
                     <div className="text-xs text-foreground/40 mt-2">
                       User: {camera.username || "none"} · Password: {camera.has_password ? "stored/encrypted" : "none"} · ROI points: {camera.roi_points?.length || 0}
-                    </div>
+                    </div></>}
                     <p className="text-xs mt-2">Last frame: {camera.last_frame_at ? new Date(camera.last_frame_at * 1000).toLocaleString() : "None"}</p>
+                    {isAdmin && <><label className="block text-sm mt-3">Customer group for {camera.name}<select className="input" value={camera.group_id || ""} onChange={e => moveGroup(camera, e.target.value)}><option value="">Ungrouped</option>{groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
                     <div className="flex flex-wrap gap-2 mt-3">
                       <button className="btn btn-secondary" onClick={() => cameraAction(camera, "enabled")}>{camera.enabled ? "Disable" : "Enable"}</button>
                       <button className="btn btn-secondary" onClick={() => cameraAction(camera, "test")}>Test connection</button>
                       <button className="btn btn-secondary" onClick={() => setZoneCamera(zoneCamera === camera.id ? null : camera.id)}>Zones</button>
                       <Link className="btn btn-secondary" href={`/training?camera=${encodeURIComponent(camera.id)}`}>Train with this camera</Link>
                     </div>
-                    {zoneCamera === camera.id && <ZoneEditor cameraId={camera.id} />}
+                    {zoneCamera === camera.id && <ZoneEditor cameraId={camera.id} />}</>}
                   </div>
-                  <button className="btn btn-danger shrink-0" onClick={() => remove(camera)} title="Delete camera"><Trash2 className="w-4 h-4" /></button>
+                  {isAdmin && <button className="btn btn-danger shrink-0" onClick={() => remove(camera)} title="Delete camera"><Trash2 className="w-4 h-4" /></button>}
                 </article>
               ))}
             </div>

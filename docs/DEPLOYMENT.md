@@ -39,7 +39,7 @@ after 12 hours and are revoked by logout. Cookies use HttpOnly and SameSite=Stri
 Secure is enabled by default. Mutating requests require a trusted Origin and a
 session CSRF token (`X-CSRF-Token`), except login which requires a trusted Origin.
 Login throttling is bounded and local to the process; it is not a distributed
-identity service. Only the admin role is currently implemented.
+identity service. Administrators manage all cameras; regular users can view and review cameras assigned directly or through customer groups. See [Users and customers](USERS_AND_CUSTOMERS.md).
 
 RTSP passwords and saved SMTP passwords are Fernet-encrypted. Back up the database
 and encryption key together. A wrong/missing key must not be worked around by
@@ -127,6 +127,5 @@ capacity remain unqualified. Issue #3 remains open for real multi-camera evidenc
 Remaining software limits include pixel-scale wrist/hip heuristic distances,
 uncalibrated risk weights, global rather than per-camera inference/threshold
 settings, no camera credential-edit form yet, no frozen-image-content watchdog,
-no durable alert outbox/retry, no secondary roles/password
-reset UI, no PostgreSQL adapter, and JSON/base64 WebSocket preview scaling.
+no durable alert outbox/retry, no PostgreSQL adapter, and JSON/base64 WebSocket preview scaling.
 Typed ignore zones mask inference/preview processing but preserve original evidence.

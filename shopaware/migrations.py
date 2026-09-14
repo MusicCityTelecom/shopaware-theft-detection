@@ -23,6 +23,23 @@ MIGRATIONS = {
         "CREATE TABLE training_samples (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES training_sessions(id) ON DELETE CASCADE, camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE, captured_at REAL NOT NULL, jpeg BLOB NOT NULL, digest TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, boxes_json TEXT NOT NULL DEFAULT '[]', reviewed INTEGER NOT NULL DEFAULT 0, reviewer TEXT, reviewed_at TEXT, UNIQUE(camera_id,digest))",
         "CREATE INDEX idx_training_samples_session ON training_samples(session_id)",
     ],
+    4: [
+        "CREATE TABLE users_v4 (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','user')), enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), created_at TEXT NOT NULL)",
+        "INSERT INTO users_v4(id,username,password_hash,role,created_at) SELECT id,username,password_hash,role,created_at FROM users",
+        "DROP TABLE sessions",
+        "DROP TABLE users",
+        "ALTER TABLE users_v4 RENAME TO users",
+        "CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, csrf TEXT NOT NULL, expires_at REAL NOT NULL)",
+        "CREATE INDEX idx_sessions_expiry ON sessions(expires_at)",
+        "CREATE TABLE camera_groups (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)",
+        "ALTER TABLE cameras ADD COLUMN group_id TEXT REFERENCES camera_groups(id) ON DELETE SET NULL",
+        "ALTER TABLE incidents ADD COLUMN group_id TEXT",
+        "ALTER TABLE cameras ADD COLUMN access_epoch INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE incidents ADD COLUMN access_epoch INTEGER NOT NULL DEFAULT 0",
+        "CREATE INDEX idx_cameras_group ON cameras(group_id)",
+        "CREATE TABLE user_camera_access (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE, PRIMARY KEY(user_id,camera_id))",
+        "CREATE TABLE user_group_access (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, group_id TEXT NOT NULL REFERENCES camera_groups(id) ON DELETE CASCADE, PRIMARY KEY(user_id,group_id))",
+    ],
 }
 
 

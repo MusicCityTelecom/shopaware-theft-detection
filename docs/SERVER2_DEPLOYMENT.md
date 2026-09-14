@@ -1,4 +1,4 @@
-# Deploy ShopAware v0.1.0-beta.2 on Server2
+# Deploy ShopAware v0.1.0-beta.3 on Server2
 
 This guide installs the CPU release at **https://shopaware.innawareucp.com**. Run the commands on Server2 as `installer`, using `sudo` where shown. No deployment was performed by the release review.
 
@@ -26,7 +26,7 @@ On Server2:
 cd /opt/shopaware
 git status --short --branch
 git fetch origin --tags
-git switch --detach v0.1.0-beta.2
+git switch --detach v0.1.0-beta.3
 cat VERSION
 docker compose version
 free -h
@@ -34,7 +34,7 @@ df -h /var/lib/shopaware
 sudo ss -ltnp '( sport = :18081 or sport = :18082 )'
 ```
 
-`VERSION` must print `0.1.0-beta.2`; both ports must be free. If Git reports local changes, preserve and review them before switching; do not reset the checkout. If the checkout is absent on a replacement host, clone `git@github.com:MusicCityTelecom/shopaware-theft-detection.git` into `/opt/shopaware` using an account/key with repository access. Docker is already installed on Server2; replacement hosts can follow [Docker's Ubuntu installation instructions](https://docs.docker.com/engine/install/ubuntu/).
+`VERSION` must print `0.1.0-beta.3`; both ports must be free. If Git reports local changes, preserve and review them before switching; do not reset the checkout. If the checkout is absent on a replacement host, clone `git@github.com:MusicCityTelecom/shopaware-theft-detection.git` into `/opt/shopaware` using an account/key with repository access. Docker is already installed on Server2; replacement hosts can follow [Docker's Ubuntu installation instructions](https://docs.docker.com/engine/install/ubuntu/).
 
 ## 2. Prepare directories and configuration
 
@@ -98,7 +98,7 @@ Run the packaged installation check after startup:
 docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -m tools.check_runtime
 ```
 
-It checks database integrity, key readability, actual H.264 encoding, and real detection/pose CPU inference on Ultralytics' bundled sample image. It creates no accounts, cameras or incidents. Expect version `0.1.0-beta.2`, codec `h264`, and `cpu_inference: passed`. This check can briefly compete with live inference; run it before adding cameras.
+It checks database integrity, key readability, actual H.264 encoding, and real detection/pose CPU inference on Ultralytics' bundled sample image. It creates no accounts, cameras or incidents. Expect version `0.1.0-beta.3`, codec `h264`, and `cpu_inference: passed`. This check can briefly compete with live inference; run it before adding cameras.
 
 ## 4. Create your administrator
 

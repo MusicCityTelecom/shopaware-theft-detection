@@ -4,6 +4,7 @@ import { apiBase, apiFetch as fetch } from "@/lib/api";
 
 import { useEffect, useState } from "react";
 import { Activity, Camera, Cpu, ShieldAlert } from "lucide-react";
+import { useSession } from "@/components/AuthGate";
 import CameraGrid from "@/components/CameraGrid";
 
 type CameraRow = { id: string; status: string };
@@ -22,6 +23,7 @@ type Health = {
 
 
 export default function Home() {
+  const isAdmin = useSession()?.role === "admin";
   const [cameraCount, setCameraCount] = useState("0/0");
   const [openIncidents, setOpenIncidents] = useState(0);
   const [health, setHealth] = useState<Health | null>(null);
@@ -85,7 +87,7 @@ export default function Home() {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
-        {cards.map(({ label, value, icon: Icon, detail }) => (
+        {cards.filter(card => isAdmin || ["Active Cameras", "Needs Review", "Backend"].includes(card.label)).map(({ label, value, icon: Icon, detail }) => (
           <div key={label} className="glass-panel p-4 flex gap-4 items-center min-h-24">
             <div className="p-3 rounded-xl bg-black/20 text-brand"><Icon className="w-6 h-6" /></div>
             <div className="min-w-0">

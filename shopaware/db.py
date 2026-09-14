@@ -88,16 +88,17 @@ class Database:
         username: str,
         password_enc: str,
         enabled: bool,
+        group_id: str | None = None,
     ) -> sqlite3.Row:
         now = utc_now_iso()
         conn = self.connect()
         try:
             conn.execute(
                 """
-                INSERT INTO cameras(id, name, rtsp_url, username, password_enc, roi_json, enabled, created_at, updated_at)
-                VALUES(?,?,?,?,?,'[]',?,?,?)
+                INSERT INTO cameras(id, name, rtsp_url, username, password_enc, roi_json, enabled, created_at, updated_at, group_id)
+                VALUES(?,?,?,?,?,'[]',?,?,?,?)
                 """,
-                (camera_id, name, rtsp_url, username, password_enc, int(enabled), now, now),
+                (camera_id, name, rtsp_url, username, password_enc, int(enabled), now, now, group_id),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM cameras WHERE id = ?", (camera_id,)).fetchone()
@@ -146,8 +147,8 @@ class Database:
                 """
                 INSERT INTO incidents(
                     id, camera_id, camera_name, event_type, message, risk_score,
-                    created_at, snapshot_path, clip_path, review_status, metadata_json
-                ) VALUES(?,?,?,?,?,?,?,?,?,'needs_review',?)
+                    created_at, snapshot_path, clip_path, review_status, metadata_json, group_id, access_epoch
+                ) VALUES(?,?,?,?,?,?,?,?,?,'needs_review',?,(SELECT group_id FROM cameras WHERE id=?),COALESCE((SELECT access_epoch FROM cameras WHERE id=?),0))
                 """,
                 (
                     incident_id,
@@ -160,6 +161,8 @@ class Database:
                     snapshot_path,
                     None,
                     json.dumps(metadata or {}),
+                    camera_id,
+                    camera_id,
                 ),
             )
             conn.commit()

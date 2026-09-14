@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import secrets as token_secrets
 import threading
 import time
@@ -43,6 +44,8 @@ from shopaware.storage import RetentionManager
 from shopaware.zones import Zone
 from shopaware.risk import RiskEngine
 from shopaware.auth import AuthService, COOKIE
+from shopaware.access import AccessControl
+from shopaware.access_api import access_router
 from shopaware.db import Database
 from shopaware.recording import RollingClipRecorder
 from shopaware.security import (
@@ -104,6 +107,7 @@ class CameraInput(BaseModel):
     username: str = Field(default="", max_length=512)
     password: str = Field(default="", max_length=1024)
     enabled: bool = True
+    group_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def validate_url(self) -> "CameraInput":
@@ -172,6 +176,8 @@ class CameraManager:
         recorder = self._make_recorder(row["id"])
         return {
             "id": row["id"],
+            "group_id": row['group_id'],
+            "access_epoch": row['access_epoch'],
             "name": row["name"],
             "rtsp_url": row["rtsp_url"],
             "username": row["username"],
@@ -210,6 +216,7 @@ class CameraManager:
             username=camera.username,
             password_enc=secrets.encrypt(camera.password),
             enabled=camera.enabled,
+            group_id=camera.group_id,
         )
         with self.lock:
             self.cameras[camera_id] = self._row_to_runtime(row)
@@ -706,6 +713,8 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
     if ok:
         return {
                 "camera_id": camera_id,
+                "group_id": cam.get('group_id'),
+                "access_epoch": cam.get('access_epoch', 0),
                 "name": cam["name"],
                 "data": base64.b64encode(buffer).decode("ascii"),
             }
@@ -826,6 +835,22 @@ async def require_authentication(request: Request, call_next):
             return JSONResponse(status_code=401, content={'detail': 'Authentication required'})
         if mutating and not token_secrets.compare_digest(request.headers.get('x-csrf-token', ''), session['csrf']):
             return JSONResponse(status_code=403, content={'detail': 'CSRF token required'})
+    if session is not None and session['role'] != 'admin' and request.url.path != '/auth/login':
+        path, method = request.url.path, request.method
+        allowed = (method in {'GET', 'HEAD'} and path in {'/auth/session', '/cameras', '/history', '/health', '/health/ready', '/groups'}) or (method == 'POST' and path in {'/auth/logout', '/auth/password'})
+        access = AccessControl(database)
+        camera_match = re.fullmatch(r'/cameras/([^/]+)/frame', path)
+        incident_match = re.fullmatch(r'/incidents/([^/]+)(/media/(?:snapshot|clip)|/review)?', path)
+        if camera_match and method in {'GET', 'HEAD'}:
+            if camera_match[1] not in access.cameras(session):
+                return JSONResponse(status_code=404, content={'detail': 'Camera not found'})
+            allowed = True
+        if incident_match and ((method in {'GET', 'HEAD'} and incident_match[2] != '/review') or (method == 'POST' and incident_match[2] == '/review')):
+            if not access.can_incident(session, incident_match[1]):
+                return JSONResponse(status_code=404, content={'detail': 'Incident not found'})
+            allowed = True
+        if not allowed:
+            return JSONResponse(status_code=403, content={'detail': 'Administrator access required'})
     request.state.session = session
     response = await call_next(request)
     response.headers['Cache-Control'] = 'no-store'
@@ -867,6 +892,42 @@ def logout(request: Request):
     return response
 
 
+class ChangePasswordInput(BaseModel):
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=12, max_length=1024)
+
+
+@app.post('/auth/password')
+def change_password(payload: ChangePasswordInput, request: Request):
+    try:
+        auth.change_password(request.state.session['id'], payload.current_password, payload.new_password)
+    except PermissionError as exc:
+        raise HTTPException(429, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    response = JSONResponse({'message': 'Password changed. Sign in again with your new password.'})
+    response.delete_cookie(COOKIE, secure=COOKIE_SECURE, httponly=True, samesite='strict')
+    return response
+
+
+def move_camera_group(camera_id, group_id):
+    with camera_lifecycle_lock:
+        with camera_manager.lock:
+            camera = camera_manager.cameras.get(camera_id)
+        if camera is None:
+            raise LookupError('Camera not found')
+        with camera['tracking'].lock:
+            row = database.get_camera(camera_id)
+            if row['group_id'] == group_id:
+                return
+            AccessControl(database).move_camera(camera_id, group_id)
+            # Reset capture, tracking and evidence buffers at a customer boundary.
+            enable_camera(camera_id, EnabledInput(enabled=bool(row['enabled'])))
+
+
+app.include_router(access_router(lambda: database, move_camera_group))
+
+
 @app.get('/health/live')
 def live():
     return {'status': 'alive'}
@@ -897,12 +958,13 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health() -> dict[str, Any]:
-    conn = database.connect()
-    try:
-        incident_counts = {row['review_status']: row['count'] for row in conn.execute('SELECT review_status, COUNT(*) AS count FROM incidents GROUP BY review_status')}
-    finally:
-        conn.close()
+def health(request: Request) -> dict[str, Any]:
+    access = AccessControl(database)
+    incident_counts = access.incident_counts(request.state.session)
+    if request.state.session['role'] != 'admin':
+        return {'status': 'ok' if model_pose is not None and model_obj is not None and not model_load_error else 'loading',
+                'app': APP_NAME, 'version': __version__, 'camera_count': len(access.cameras(request.state.session)),
+                'incident_counts': incident_counts}
     return {
         "status": "degraded" if model_load_error else ("ok" if model_pose is not None else "loading"),
         "app": APP_NAME,
@@ -956,8 +1018,14 @@ def save_settings(payload: SettingsInput):
 
 
 @app.get("/cameras")
-def list_cameras() -> list[dict[str, Any]]:
-    return camera_manager.list_safe()
+def list_cameras(request: Request) -> list[dict[str, Any]]:
+    scope = AccessControl(database).cameras(request.state.session)
+    rows = [dict(cam, **{k: v for k, v in scope[cam['id']].items() if k != 'id'})
+            for cam in camera_manager.list_safe() if cam['id'] in scope]
+    if request.state.session['role'] != 'admin':
+        keys = {'id', 'name', 'status', 'enabled', 'last_frame_at', 'group_id', 'group_name'}
+        rows = [{k: v for k, v in row.items() if k in keys} for row in rows]
+    return rows
 
 
 @app.post("/cameras", status_code=201)
@@ -1025,12 +1093,16 @@ app.include_router(training_router(lambda: database, training_frame))
 
 
 @app.get('/cameras/{camera_id}/frame')
-def camera_frame(camera_id: str):
-    with camera_manager.lock:
-        camera = camera_manager.cameras.get(camera_id)
-    if not camera or not camera.get('cap'):
-        raise HTTPException(404, 'Camera frame unavailable')
-    ok, frame = camera['cap'].read()
+def camera_frame(camera_id: str, request: Request):
+    # A customer move may occur between middleware authorization and this handler.
+    with camera_lifecycle_lock:
+        if camera_id not in AccessControl(database).cameras(request.state.session):
+            raise HTTPException(404, 'Camera frame unavailable')
+        with camera_manager.lock:
+            camera = camera_manager.cameras.get(camera_id)
+        if not camera or not camera.get('cap'):
+            raise HTTPException(404, 'Camera frame unavailable')
+        ok, frame = camera['cap'].read()
     if not ok or frame is None:
         raise HTTPException(404, 'Camera frame unavailable')
     ok, jpeg = cv2.imencode('.jpg', frame)
@@ -1110,15 +1182,18 @@ def put_zones(camera_id: str, payload: ZonesInput):
 
 
 @app.get("/history")
-def history(limit: int = 100) -> list[dict[str, Any]]:
-    return database.history(min(max(limit, 1), 500))
+def history(request: Request, limit: int = 100) -> list[dict[str, Any]]:
+    return AccessControl(database).history(request.state.session, min(max(limit, 1), 500))
 
 
 @app.get("/incidents/{incident_id}")
-def incident_detail(incident_id: str) -> dict[str, Any]:
+def incident_detail(incident_id: str, request: Request) -> dict[str, Any]:
     incident = database.incident(incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="Incident not found")
+    if request.state.session['role'] != 'admin':
+        for kind in ['snapshot', 'clip']:
+            incident[kind + '_path'] = kind if incident[kind + '_path'] else None
     return incident
 
 
@@ -1129,7 +1204,17 @@ def review_incident(incident_id: str, review: ReviewInput, request: Request) -> 
         raise HTTPException(status_code=404, detail="Incident not found")
     incident = database.incident(incident_id)
     assert incident is not None
+    if request.state.session['role'] != 'admin':
+        for kind in ['snapshot', 'clip']:
+            incident[kind + '_path'] = kind if incident[kind + '_path'] else None
     return incident
+
+
+def visible_frame_payload(payload, session):
+    scope = AccessControl(database).cameras(session)
+    return {'type': 'multi_frame', 'cameras': [dict(cam, group_id=scope[cam['camera_id']]['group_id'])
+            for cam in payload.get('cameras', []) if cam['camera_id'] in scope
+            and cam.get('access_epoch', 0) == scope[cam['camera_id']]['access_epoch']]}
 
 
 @app.websocket("/ws")
@@ -1140,7 +1225,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
     try:
         while True:
-            if not auth.session(websocket.cookies.get(COOKIE)):
+            session = auth.session(websocket.cookies.get(COOKIE))
+            if not session:
                 await websocket.close(code=1008)
                 return
             payload = None
@@ -1148,7 +1234,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 if latest_frame is not None:
                     payload = latest_frame
             if payload is not None:
-                await websocket.send_text(json.dumps(payload))
+                await websocket.send_text(json.dumps(visible_frame_payload(payload, session)))
             await asyncio.sleep(0.05)
     except WebSocketDisconnect:
         return
