@@ -1,392 +1,273 @@
-# Deploy ShopAware v0.1.0-beta.1 on server2
+# Deploy ShopAware v0.1.0-beta.2 on Server2
 
-Target:
+This guide installs the CPU release at **https://shopaware.innawareucp.com**. Run the commands on Server2 as `installer`, using `sudo` where shown. No deployment was performed by the release review.
 
-- Host: `server2`
-- OS: Ubuntu 22.04 LTS class host with Apache and Docker
-- Public URL: `https://shopaware.innawareucp.com`
-- Recommended checkout: `/opt/shopaware`
-- Persistent state: `/var/lib/shopaware`
-- Backup root: `/var/backups/shopaware`
-- Optional Apache placeholder docroot: `/var/www/shopaware`
+## Confirmed starting point
 
-Do **not** store the ShopAware database, Fernet key, incident footage or training data
-under `/var/www`. Apache only reverse-proxies the application.
+Read-only inspection on 2026-09-14 found Ubuntu 22.04.5 LTS, x86_64, 8 logical CPUs, 15 GiB RAM (about 3.3 GiB available), Docker Compose 2.40.3, Apache 2.4.52 and Certbot. `/opt/shopaware` already contains the clean beta.1 checkout and an `.env`; persistent directories exist but the data directory is empty. No ShopAware containers were present.
 
-This is a beta deployment for real-environment qualification. Keep the repository
-private and do not describe AI detections as proof of theft.
+Port **18080 belongs to another service**. This release uses backend **127.0.0.1:18082** and dashboard **127.0.0.1:18081**. DNS already points to Server2, but there was no ShopAware Apache vhost or matching TLS certificate. Recheck these facts if deploying later.
 
-## 1. DNS and firewall
+Start with **one camera and 2 inference FPS**. The server also runs other workloads. Build the images sequentially, watch available RAM, and measure camera latency before adding channels. Successful CPU inference does not establish a supported camera count or theft-detection accuracy.
 
-Create/confirm DNS for `shopaware.innawareucp.com` pointing to the public endpoint
-that already serves server2. Only normal HTTPS/HTTP needs to be exposed publicly.
-The ShopAware containers bind to loopback only:
+## 1. Connect and check the checkout
 
-- backend: `127.0.0.1:18080`
-- dashboard: `127.0.0.1:18081`
-
-Do not open those ports in the Internet-facing firewall.
-
-## 2. Prepare the host
-
-From the repository checkout you can run:
+Connect the required VPN or enable the approved source IP first. From Windows PowerShell or another SSH client:
 
 ```bash
-sudo bash deploy/server2/prepare-host.sh
+ssh -p 60022 installer@50.206.74.206
 ```
 
-Or manually:
+Use your configured SSH key or enter the password at the interactive prompt. Never put the password in a command, Git, or `.env`.
+
+On Server2:
 
 ```bash
-sudo mkdir -p /opt/shopaware /var/www/shopaware
-sudo mkdir -p /var/lib/shopaware/{data,alerts,incidents,models}
-sudo mkdir -p /var/backups/shopaware
-sudo chown "$USER:$USER" /opt/shopaware
-sudo chmod 0750 /var/lib/shopaware /var/lib/shopaware/{data,alerts,incidents,models}
-sudo chmod 0700 /var/backups/shopaware
-sudo a2enmod proxy proxy_http proxy_wstunnel headers ssl rewrite
-```
-
-Verify Docker + Compose:
-
-```bash
-docker --version
+cd /opt/shopaware
+git status --short --branch
+git fetch origin --tags
+git switch --detach v0.1.0-beta.2
+cat VERSION
 docker compose version
+free -h
+df -h /var/lib/shopaware
+sudo ss -ltnp '( sport = :18081 or sport = :18082 )'
 ```
 
-If your normal login is not allowed to use Docker, add it to the Docker group and
-start a new login session, or run the Compose commands with `sudo`.
+`VERSION` must print `0.1.0-beta.2`; both ports must be free. If Git reports local changes, preserve and review them before switching; do not reset the checkout. If the checkout is absent on a replacement host, clone `git@github.com:MusicCityTelecom/shopaware-theft-detection.git` into `/opt/shopaware` using an account/key with repository access. Docker is already installed on Server2; replacement hosts can follow [Docker's Ubuntu installation instructions](https://docs.docker.com/engine/install/ubuntu/).
 
-## 3. Clone the private repository
-
-Using SSH credentials that can access the private MusicCityTelecom repository:
-
-```bash
-cd /opt
-git clone git@github.com:MusicCityTelecom/shopaware-theft-detection.git shopaware
-cd /opt/shopaware
-git fetch --all --tags
-```
-
-For this beta, deploy the release branch/tag created for `v0.1.0-beta.1`. If the tag
-is available:
-
-```bash
-git checkout v0.1.0-beta.1
-```
-
-If GitHub Actions could not publish the tag because of an account Actions billing
-restriction, use the immutable release-branch commit documented in the GitHub release
-notes until the tag is created.
-
-## 4. Create the production environment file
+## 2. Prepare directories and configuration
 
 ```bash
 cd /opt/shopaware
-cp deploy/server2/.env.production.example .env
+sudo bash deploy/server2/prepare-host.sh
+if [ ! -f .env ]; then
+  cp deploy/server2/.env.production.example .env
+fi
 chmod 0600 .env
 nano .env
 ```
 
-Required production settings include:
+Preserve the existing `.env`; compare it with the new example and set these values:
 
 ```dotenv
+SHOPAWARE_BACKEND_PORT=18082
+SHOPAWARE_DASHBOARD_PORT=18081
 SHOPAWARE_CORS_ORIGINS=https://shopaware.innawareucp.com
 SHOPAWARE_COOKIE_SECURE=true
-SHOPAWARE_ENABLE_SPECIALIZED_MODEL=false
-```
-
-Start with the standard detector/pose models:
-
-```dotenv
 SHOPAWARE_DETECTION_MODEL=yolo26n.pt
 SHOPAWARE_POSE_MODEL=yolo26n-pose.pt
+SHOPAWARE_ENABLE_SPECIALIZED_MODEL=false
+SHOPAWARE_INFERENCE_FPS=2
+SHOPAWARE_RETENTION_DAYS=30
+SHOPAWARE_MAX_STORAGE_BYTES=10737418240
 ```
 
-Do not enable `shoplifting.pt` unless you intentionally provide and qualify that
-checkpoint. SMTP can be configured later in the authenticated Settings UI.
+The Compose profile forces persistent database, key, evidence and model paths, plus FFmpeg H.264 recording. Keep the default CPU PyTorch index. There is no NVIDIA setup step. SMTP can be entered later in Settings.
 
-The default evidence quota is 10 GiB. Check available space before deciding whether
-to raise it:
+The persistent directories are:
 
-```bash
-df -h /var/lib/shopaware
-```
+| Host path | Container path | Contents |
+| --- | --- | --- |
+| `/var/lib/shopaware/data` | `/app/data` | SQLite database, encryption key, Ultralytics settings |
+| `/var/lib/shopaware/alerts` | `/app/alerts` | Incident snapshots |
+| `/var/lib/shopaware/incidents` | `/app/incidents` | MP4 clips and timestamp sidecars |
+| `/var/lib/shopaware/models` | `/app/models` | Downloaded and qualified checkpoints |
+| `/var/lib/shopaware/training` | `/app/training-data` | Exported datasets |
+| `/var/lib/shopaware/runs` | `/app/runs` | Training outputs |
 
-## 5. Build the CPU deployment
+Do not put these directories under Apache's document root. The 10 GiB evidence quota does not limit training datasets, model weights or backups.
 
-Server2 can run the CPU image for initial functional qualification:
+## 3. Build and start
 
 ```bash
 cd /opt/shopaware
-docker compose --env-file .env -f deploy/server2/docker-compose.yml build --pull
-```
-
-Then start it:
-
-```bash
-docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d
-```
-
-Watch startup:
-
-```bash
+COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f deploy/server2/docker-compose.yml build --pull
+docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d --wait --wait-timeout 300
 docker compose --env-file .env -f deploy/server2/docker-compose.yml ps
-docker compose --env-file .env -f deploy/server2/docker-compose.yml logs -f --tail=200 shopaware
+docker compose --env-file .env -f deploy/server2/docker-compose.yml logs --tail=100 shopaware
+curl --fail http://127.0.0.1:18082/health/live
+curl --fail http://127.0.0.1:18081/api/health/live
 ```
 
-On first model use, Ultralytics may download the standard YOLO26 checkpoints.
-Do not interrupt that initial load unless it is clearly failing.
+The first build downloads packages; the first backend start downloads standard YOLO26 checkpoints into `/var/lib/shopaware/models`. Model initialization retries after transient download failures. Liveness only proves the process is serving requests; it does not prove the models are ready. One backend process owns the cameras; do not scale its workers or replicas.
 
-## 6. Create the first administrator
-
-The application ships with no default password. Create the first admin interactively:
+Run the packaged installation check after startup:
 
 ```bash
-cd /opt/shopaware
+docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -m tools.check_runtime
+```
+
+It checks database integrity, key readability, actual H.264 encoding, and real detection/pose CPU inference on Ultralytics' bundled sample image. It creates no accounts, cameras or incidents. Expect version `0.1.0-beta.2`, codec `h264`, and `cpu_inference: passed`. This check can briefly compete with live inference; run it before adding cameras.
+
+## 4. Create your administrator
+
+```bash
 docker compose --env-file .env -f deploy/server2/docker-compose.yml exec shopaware python -m shopaware.auth
 ```
 
-Use a unique password of at least 12 characters. Do not put that password in `.env`,
-Git, shell history or deployment documentation.
+Enter a username and unique password of at least 12 characters at the prompts. There is no default account. Run this once for each new administrator; repeating the same username fails rather than replacing its password.
 
-## 7. Verify the loopback services
+## 5. Issue the domain certificate
+
+Server2 already runs Apache for other sites. Only install the ShopAware vhost; do not disable other sites or stop Apache.
+
+Check that another administrator has not added this domain since inspection:
 
 ```bash
-curl -fsS http://127.0.0.1:18080/health/live
-curl -I http://127.0.0.1:18081/
+sudo apache2ctl -S
+getent ahostsv4 shopaware.innawareucp.com
 ```
 
-Expected backend liveness response:
+If a ShopAware vhost now exists, update that domain's configuration instead of creating a duplicate. Otherwise bootstrap HTTP certificate validation:
 
-```json
-{"status":"alive"}
+```bash
+cd /opt/shopaware
+sudo cp deploy/server2/shopaware-http.conf /etc/apache2/sites-available/shopaware.conf
+sudo a2ensite shopaware.conf
+sudo apache2ctl configtest && sudo systemctl reload apache2
+sudo install -d /var/www/shopaware/.well-known/acme-challenge
+printf 'shopaware-acme-check\n' | sudo tee /var/www/shopaware/.well-known/acme-challenge/shopaware-check >/dev/null
+curl --fail http://shopaware.innawareucp.com/.well-known/acme-challenge/shopaware-check
+sudo certbot certonly --webroot -w /var/www/shopaware -d shopaware.innawareucp.com
 ```
 
-The authenticated readiness/health view should be checked after login because model
-state and most API routes require a session.
+The probe must return `shopaware-acme-check`. Let Certbot prompt for the certificate contact and terms. Public port 80 must reach this Apache vhost for webroot validation. If access rules block the certificate authority, configure DNS validation through your DNS provider before continuing; do not disable TLS verification. [Certbot's webroot documentation](https://eff-certbot.readthedocs.io/en/stable/using.html#webroot) explains this validation method.
 
-## 8. TLS certificate and Apache
-
-Obtain/confirm a certificate for:
-
-`shopaware.innawareucp.com`
-
-The supplied Apache template expects the standard Let's Encrypt paths:
-
-```text
-/etc/letsencrypt/live/shopaware.innawareucp.com/fullchain.pem
-/etc/letsencrypt/live/shopaware.innawareucp.com/privkey.pem
-```
-
-If your certificate tooling writes different paths, update the template before enabling it.
-
-Install the vhost:
+Then install HTTPS routing:
 
 ```bash
 sudo cp deploy/server2/shopaware-apache.conf /etc/apache2/sites-available/shopaware.conf
-sudo a2ensite shopaware.conf
-sudo apache2ctl configtest
-sudo systemctl reload apache2
+sudo apache2ctl configtest && sudo systemctl reload apache2
+sudo install -m 0755 deploy/server2/renew-apache.sh /etc/letsencrypt/renewal-hooks/deploy/shopaware-apache
+sudo certbot renew --cert-name shopaware.innawareucp.com --dry-run
+systemctl list-timers --all | grep -i certbot
 ```
 
-The vhost routes:
+Confirm a Certbot renewal timer is present. The supplied deploy hook checks Apache configuration and reloads it after renewal. If Certbot reports different certificate paths, update `shopaware.conf` to its actual paths before reloading. The template keeps the HTTP ACME challenge reachable for renewals.
 
-- `/ws` directly to FastAPI on `127.0.0.1:18080` for authenticated WebSocket previews;
-- all other paths to Next.js on `127.0.0.1:18081`;
-- Next.js `/api/...` requests internally to the backend container.
+Apache sends `/ws` to backend port 18082 and other requests to dashboard port 18081. Keep both ports on loopback; expose only the intended HTTP/HTTPS entry point. If you deliberately change ports in `.env`, update the Apache template and verifier environment to match.
 
-No public access to ports 18080/18081 is needed.
-
-## 9. Verify the public deployment
+## 6. Verify and add your first camera
 
 ```bash
 cd /opt/shopaware
 bash deploy/server2/verify.sh shopaware.innawareucp.com
 ```
 
-Then browse to:
+This requires valid TLS, working HTTP proxies, and **401** from protected unauthenticated routes. A 200 or 503 from unauthenticated readiness is a failure, not a successful auth check.
 
-`https://shopaware.innawareucp.com`
+Open **https://shopaware.innawareucp.com**, sign in, and:
 
-Log in with the admin account created above.
+1. Confirm Health shows models ready and recording codec `h264`.
+2. Add one camera under Cameras. Enter the RTSP URL without credentials; use the separate username/password fields. Start with a low-resolution substream.
+3. Test connection, enable the camera, and verify live WebSocket preview.
+4. Draw merchandise, checkout, exit, restricted and ignore zones as appropriate.
+5. Stage normal browsing and consented example actions. Inspect candidate incidents, original pre/post-event video, seeking/playback and review status.
+6. Configure SMTP if wanted, trigger an authorized test, and confirm actual delivery.
+7. Disconnect/reconnect the camera, restart the backend, and confirm settings, camera credentials and evidence persist.
 
-## 10. Add the first RTSP camera
+Add a second stream only after checking CPU, RAM, frame age and event latency. Real two-camera tracker qualification remains tracked in issue #3. Risk scores are heuristic and require human review.
 
-In **Cameras**:
+## 7. Train using a selected camera
 
-1. Enter a descriptive camera name.
-2. Enter the RTSP URL **without embedded credentials**.
-3. Enter username and password in their separate fields.
-4. Save the camera.
-5. Use **Test connection**.
-6. Wait for status/live preview.
-7. Configure merchandise/restricted/checkout/exit/ignore zones.
+Choose **Cameras → Train with this camera**, or open **Training** and select the camera. Capture separate training, validation and test sessions, draw object boxes, explicitly review each example, and download the reviewed ZIP.
 
-Do not paste `rtsp://user:password@host/...` into tickets, screenshots or logs.
-ShopAware strips URL userinfo and encrypts saved camera passwords.
+Follow [Server2 training instructions](SERVER2_TRAINING.md) for transferring the ZIP, validating it, stopping live analysis, running CPU training, comparing the held-out evaluation and explicitly activating a checkpoint. This trains an object detector; it does not automatically learn theft intent. A custom detector is not activated automatically and currently applies globally when selected.
 
-## 11. First real-camera qualification
+## 8. Back up and verify
 
-Before trusting incident alerts, stage controlled tests and record results:
-
-- normal walking and browsing;
-- reaching into merchandise zones;
-- holding/returning an item;
-- staged concealment-like hand-to-waist behavior;
-- checkout-zone traversal;
-- exit-zone traversal;
-- two cameras operating simultaneously;
-- camera disconnect/reconnect;
-- NVR reboot or RTSP interruption;
-- incident snapshot and pre/post-event clip playback;
-- false alarms during ordinary activity.
-
-Issue #3 should remain open until two real simultaneous streams establish that the
-per-camera tracker behavior is correct on actual detections.
-
-## 12. Model qualification on server2
-
-Use a representative image containing a person:
-
-```bash
-cd /opt/shopaware
-docker compose --env-file .env -f deploy/server2/docker-compose.yml exec shopaware \
-  python -m tools.qualify_models --image /app/data/representative-person.jpg --device cpu --output /app/data/cpu-qualification.json
-```
-
-Copy the image into `/var/lib/shopaware/data/representative-person.jpg` first.
-Review `/var/lib/shopaware/data/cpu-qualification.json` afterward.
-
-CPU inference may be too slow for many channels. That is a measurement question;
-do not infer a supported channel count from successful startup alone.
-
-## 13. NVIDIA GPU deployment later
-
-The repository contains `docker-compose.gpu.yml`, but GPU deployment still requires:
-
-- supported NVIDIA GPU/driver;
-- NVIDIA Container Toolkit;
-- a PyTorch CUDA wheel index matching the target environment;
-- `torch.cuda.is_available()` returning true inside the container;
-- actual latency/VRAM/channel-count measurement.
-
-Do not switch the server2 deployment to a CUDA image unless those prerequisites are
-confirmed.
-
-## 14. Training from a camera
-
-Open **Training** or **Cameras → Train with this camera**.
-
-Create separate collection sessions for:
-
-- Training
-- Validation
-- Test
-
-Capture varied clean frames, annotate all relevant visible COCO objects, explicitly
-review each example and export the dataset ZIP. Follow `docs/TRAINING.md` exactly.
-
-Training on server2 is possible but not recommended while ShopAware is actively
-analyzing cameras, especially on CPU. Prefer a separate training machine. If you do
-train on server2, stop the ShopAware services first or accept that training and
-real-time inference will compete for CPU/RAM/GPU.
-
-Validate an export before training:
-
-```bash
-python -m tools.train_camera --data training-data/camera/data.yaml --check-only
-```
-
-CPU example:
-
-```bash
-python -m tools.train_camera --data training-data/camera/data.yaml --device cpu --epochs 50 --batch 4
-```
-
-A trained detector is not activated automatically. Compare it against the baseline,
-then explicitly set the qualified checkpoint path in Settings and restart the backend.
-Keep `yolo26n-pose.pt` as the pose model.
-
-## 15. Backups
-
-The Fernet key and SQLite database must be backed up together.
-
-Basic online backup:
-
-```bash
-sudo bash /opt/shopaware/deploy/server2/backup.sh
-```
-
-To include evidence media as well:
+Stop independent training jobs first. The backup pauses the backend while taking a consistent database/key/configuration snapshot and resumes it afterward. Large evidence archives extend this analysis downtime.
 
 ```bash
 sudo INCLUDE_MEDIA=1 bash /opt/shopaware/deploy/server2/backup.sh
+sudo ls -lt /var/backups/shopaware
 ```
 
-Backups are written under `/var/backups/shopaware/<UTC timestamp>/` with checksums.
-Protect these backups: the database can include private training-camera images and
-the key decrypts stored camera/SMTP credentials.
+Backups contain database, matching encryption key, `.env`, model files, exported datasets, training outputs and (with `INCLUDE_MEDIA=1`) evidence. Each unique backup directory contains `SHA256SUMS`; the script verifies it and exits nonzero on failure. Copy successful backups to protected off-server storage. An incomplete directory from a failed run is not a valid restore point.
 
-## 16. Update procedure
+## 9. Update and rollback
 
-Before an update:
-
-```bash
-sudo bash /opt/shopaware/deploy/server2/backup.sh
-cd /opt/shopaware
-git fetch --all --tags
-```
-
-Checkout the new release tag, then rebuild:
-
-```bash
-git checkout <new-tag>
-docker compose --env-file .env -f deploy/server2/docker-compose.yml build --pull
-docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d
-```
-
-The database uses additive migrations. Still retain the pre-update backup and matching
-Fernet key until the new release is qualified.
-
-## 17. Rollback
-
-If a new release fails:
+Before updating, take a complete backup as above and record `git rev-parse HEAD`. Then:
 
 ```bash
 cd /opt/shopaware
-git checkout v0.1.0-beta.1
-docker compose --env-file .env -f deploy/server2/docker-compose.yml build
-docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d
+git fetch origin --tags
+git switch --detach <new-release-tag>
+COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f deploy/server2/docker-compose.yml build --pull
+docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d --wait --wait-timeout 300
+bash deploy/server2/verify.sh shopaware.innawareucp.com
 ```
 
-If a migration/data problem requires database restoration, stop the backend first and
-restore **both** the database and its matching `.shopaware.key` from the same backup.
-Do not mix a database with an unrelated encryption key.
+To revert code, switch to the previously recorded release/commit, rebuild, and recreate the services. Keep persistent directories intact. Do not downgrade across an incompatible database schema without restoring the pre-update database and matching key.
 
-## 18. Useful operational commands
+To restore data, open a root shell and set `RESTORE_DIR` to one successful backup. This procedure first preserves the current state in another directory and removes no existing evidence:
+
+```bash
+sudo -i
+set -euo pipefail
+RESTORE_DIR=/var/backups/shopaware/REPLACE_WITH_BACKUP_DIRECTORY
+cd "$RESTORE_DIR"
+sha256sum --check SHA256SUMS
+# STOP if checksum verification fails.
+cd /opt/shopaware
+docker compose --env-file .env -f deploy/server2/docker-compose.yml stop shopaware dashboard
+RESCUE_DIR=$(mktemp -d /var/backups/shopaware/pre-restore-XXXXXX)
+cp -a /var/lib/shopaware/data "$RESCUE_DIR/"
+cp -a /opt/shopaware/.env "$RESCUE_DIR/"
+for name in shopaware.db shopaware.db-wal shopaware.db-shm .shopaware.key; do
+  if [ -e "/var/lib/shopaware/data/$name" ]; then
+    mv "/var/lib/shopaware/data/$name" "$RESCUE_DIR/$name"
+  fi
+done
+install -m 0600 "$RESTORE_DIR/shopaware.db" /var/lib/shopaware/data/shopaware.db
+install -m 0600 "$RESTORE_DIR/.shopaware.key" /var/lib/shopaware/data/.shopaware.key
+install -m 0600 "$RESTORE_DIR/.env" /opt/shopaware/.env
+for archive in models training runs evidence; do
+  if [ -f "$RESTORE_DIR/$archive.tar.gz" ]; then
+    if [ "$archive" = evidence ]; then
+      directories="alerts incidents"
+    else
+      directories="$archive"
+    fi
+    for directory in $directories; do
+      if [ -d "/var/lib/shopaware/$directory" ]; then
+        mv "/var/lib/shopaware/$directory" "$RESCUE_DIR/$directory"
+      fi
+    done
+    tar -xzf "$RESTORE_DIR/$archive.tar.gz" -C /var/lib/shopaware
+  fi
+done
+chown installer:installer /opt/shopaware/.env
+exit
+```
+
+Extract only archives from your own verified backups. The commands move directories being restored into `RESCUE_DIR`, preserving their newer contents. Restoring without `evidence.tar.gz` can leave incident rows whose files are unavailable. Restoring `.env` restores configuration too; verify domain and port settings still match Apache. Then select the matching code version, rebuild if needed, and run `up -d --wait` and the verification checks again.
+
+## Troubleshooting
+
+| Symptom | Check/action |
+| --- | --- |
+| SSH timeout | VPN/source-IP access and port 60022; no password is sent until connection succeeds. |
+| Address already in use | `sudo ss -ltnp`; leave the existing port-18080 service alone. |
+| Certificate name mismatch | Complete the ShopAware-specific vhost/certificate steps; do not bypass verification. |
+| 502 | Compose status and backend/dashboard logs; confirm the Apache ports match. |
+| Login fails/403 | Correct HTTPS origin in `.env`, secure cookie enabled, and actual browser hostname. Saved Settings can override environment defaults after restart. |
+| Models stay loading | Outbound checkpoint download, free disk, model paths and backend logs; initialization retries every 30 seconds. |
+| Preview absent | Browser WebSocket `/ws` upgrade, Apache proxy modules, session cookie, enabled camera and fresh RTSP frames. |
+| High CPU or delayed alerts | Use fewer cameras, lower-resolution substreams and lower inference FPS. CPU training should run while analysis is stopped. |
+| Clip unavailable | Incident media status, disk/quota, writer errors and H.264 encoder; interrupted clips are not presented as complete. |
+| Restart loses cameras | Confirm this Server2 Compose profile and its persistent DB/key mounts, not an older ad-hoc container. |
+
+Useful commands:
 
 ```bash
 cd /opt/shopaware
-
-# status
-docker compose --env-file .env -f deploy/server2/docker-compose.yml ps
-
-# backend logs
-docker compose --env-file .env -f deploy/server2/docker-compose.yml logs -f --tail=200 shopaware
-
-# dashboard logs
-docker compose --env-file .env -f deploy/server2/docker-compose.yml logs -f --tail=200 dashboard
-
-# restart backend after settings/model changes
+docker compose --env-file .env -f deploy/server2/docker-compose.yml logs -f --tail=100 shopaware dashboard
+docker stats --no-stream shopaware-backend shopaware-dashboard
 docker compose --env-file .env -f deploy/server2/docker-compose.yml restart shopaware
-
-# restart everything
-docker compose --env-file .env -f deploy/server2/docker-compose.yml restart
-
-# stop
-docker compose --env-file .env -f deploy/server2/docker-compose.yml down
+sudo apache2ctl configtest
+sudo tail -n 50 /var/log/apache2/shopaware-ssl-error.log
 ```
 
-Persistent data remains under `/var/lib/shopaware` when the containers are rebuilt
-or removed.
+If migrating an older root-level Compose deployment, inspect and copy its actual database and matching key out of the old container **before** removing/recreating it. Older `.env` relative paths could override persistent Docker defaults. The inspected Server2 installation had no existing ShopAware database to migrate.

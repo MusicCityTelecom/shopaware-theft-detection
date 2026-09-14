@@ -29,6 +29,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse, Response
 from pydantic import BaseModel, Field, model_validator
 from ultralytics import YOLO
+from shopaware import __version__
+from shopaware.models import model_path
+from shopaware.media import media_writer
 
 from shopaware.ingest import ThreadedCamera
 from shopaware.tracking import CameraTrackingContext
@@ -411,16 +414,16 @@ def load_models() -> None:
             return
         try:
             logger.info(f"Loading ShopAware pose model: {redact(POSE_MODEL)}")
-            model_pose = YOLO(POSE_MODEL)
+            model_pose = YOLO(model_path(POSE_MODEL))
 
             model_is_specialized = False
-            if ENABLE_SPECIALIZED_MODEL and Path(SPECIALIZED_MODEL).exists():
+            if ENABLE_SPECIALIZED_MODEL and Path(model_path(SPECIALIZED_MODEL)).exists():
                 logger.info(f"Loading specialized activity model: {redact(SPECIALIZED_MODEL)}")
-                model_obj = YOLO(SPECIALIZED_MODEL)
+                model_obj = YOLO(model_path(SPECIALIZED_MODEL))
                 model_is_specialized = True
             else:
                 logger.info(f"Loading ShopAware detection model: {redact(DETECTION_MODEL)}")
-                model_obj = YOLO(DETECTION_MODEL)
+                model_obj = YOLO(model_path(DETECTION_MODEL))
             model_load_error = ""
         except Exception as exc:
             model_load_error = redact(str(exc))
@@ -743,11 +746,14 @@ def maintenance_loop() -> None:
 
 def video_loop() -> None:
     global latest_frame
-    try:
-        load_models()
-    except Exception as exc:
-        logger.error(f"Model initialization failed: {redact(str(exc))}")
-        return
+    while not video_stop.is_set():
+        try:
+            load_models()
+            break
+        except Exception as exc:
+            logger.error(f"Model initialization failed; retrying in 30 seconds: {redact(str(exc))}")
+            if video_stop.wait(30):
+                return
 
     no_signal = np.zeros((720, 1280, 3), dtype=np.uint8)
     cv2.putText(no_signal, "NO SIGNAL", (420, 360), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
@@ -795,7 +801,7 @@ def video_loop() -> None:
             time.sleep(1)
 
 
-app = FastAPI(title=APP_NAME, version="0.2.0")
+app = FastAPI(title=APP_NAME, version=__version__)
 
 
 @app.exception_handler(RequestValidationError)
@@ -900,6 +906,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "degraded" if model_load_error else ("ok" if model_pose is not None else "loading"),
         "app": APP_NAME,
+        "version": __version__,
         "detection_model": DETECTION_MODEL,
         "pose_model": POSE_MODEL,
         "specialized_model": SPECIALIZED_MODEL if ENABLE_SPECIALIZED_MODEL else None,
@@ -915,6 +922,7 @@ def health() -> dict[str, Any]:
             "cuda_allocated_bytes": torch.cuda.memory_allocated() if torch.cuda.is_available() else None,
         },
         "recording": {
+            "codec": media_writer().codec,
             "pre_event_seconds": PRE_EVENT_SECONDS,
             "post_event_seconds": POST_EVENT_SECONDS,
             "sample_fps": RECORDING_FPS,
@@ -1148,6 +1156,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    media_writer()  # Fail startup clearly if an explicitly required encoder is unavailable.
     conn = database.connect()
     try:
         conn.execute("UPDATE incidents SET media_status='interrupted' WHERE media_status='pending'")

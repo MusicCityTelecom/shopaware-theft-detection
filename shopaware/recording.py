@@ -4,7 +4,7 @@ import logging
 import math
 import re
 from concurrent.futures import ThreadPoolExecutor
-from shopaware.media import MediaWriter, OpenCVWriter
+from shopaware.media import MediaWriter, media_writer as select_media_writer
 
 import threading
 import time
@@ -65,7 +65,7 @@ class RollingClipRecorder:
             raise ValueError('Recording durations/FPS must be finite and in (0, 600]')
         if min(max_buffer_bytes, max_clip_bytes, max_inflight) <= 0:
             raise ValueError('Recording limits must be positive')
-        self.media_writer = media_writer or OpenCVWriter()
+        self.media_writer = media_writer or select_media_writer()
         self.max_buffer_bytes, self.max_clip_bytes, self.max_inflight = max_buffer_bytes, max_clip_bytes, max_inflight
         self._inflight: set[str] = set()
         self._recent: deque[str] = deque(maxlen=1024)

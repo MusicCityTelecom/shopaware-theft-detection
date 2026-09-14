@@ -1,7 +1,7 @@
 # Development deployment and qualification
 
-This branch remains private and the PR remains a draft. Unit tests do not make
-ShopAware production-ready. Do not run multiple backend processes against one
+For the CPU release, follow [the complete Server2 guide](SERVER2_DEPLOYMENT.md).
+Unit tests do not establish live-camera accuracy. Do not run multiple backend processes against one
 appliance database: camera ownership, recording and maintenance are single-process.
 
 ## Local setup
@@ -27,9 +27,9 @@ If the host restricts Ultralytics' default settings directory, set
 
 The dashboard uses a same-origin `/api` proxy to the backend. Set server-side
 `SHOPAWARE_BACKEND_URL` when the backend is elsewhere. For HTTPS deployments,
-configure a TLS reverse proxy for both HTTP and WebSocket traffic and build with
-the appropriate `NEXT_PUBLIC_WS_URL`; the development WebSocket default uses
-port 8000. Reverse-proxy/TLS deployment still needs integration qualification.
+configure a TLS reverse proxy for both HTTP and WebSocket traffic. Public hostnames
+default to same-origin `/ws`; localhost uses port 8000. An explicit build-time
+`NEXT_PUBLIC_WS_URL` can override this. The Server2 guide includes Apache routing.
 
 ## Authentication and secrets
 
@@ -66,8 +66,9 @@ allows four in-flight clips and one writer, a 32 MiB prebuffer and 96 MiB per-cl
 limit. At capacity, clips can be declined or marked failed; the incident persists.
 Memory bounds can truncate available prehistory on large/high-entropy images.
 
-MP4 output uses `mp4v`; `OpenCVWriter` is replaceable and accepts configured H.264
-fourccs where available. H.264 browser compatibility is not claimed tested. Writers
+Release images use FFmpeg H.264/yuv420p with fast-start MP4 metadata. Browser playback,
+seeking and authenticated byte ranges passed in Edge. Local development without
+FFmpeg falls back to OpenCV `mp4v`; install FFmpeg for browser-compatible clips. Writers
 decode incrementally, normalize resolution, hold previous frames across sampling
 gaps, verify output frame count and store source timestamps in a JSON sidecar.
 Missing frames are not fabricated as observed video; the sidecar records actual
@@ -80,7 +81,8 @@ when expired or over quota. Pending/in-flight recordings are excluded. Unknown
 files are counted but not deleted. If active/unknown media exceeds quota, status
 reports it rather than deleting active evidence. Filesystem and SQLite deletion
 cannot be one atomic transaction; failed deletions retain the row, and authenticated
-media routes return 404 for missing media. Backups/archive destinations remain future work.
+media routes return 404 for missing media. The Server2 guide includes consistent
+backups and restoration of database, matching key, configuration and evidence.
 
 ## CPU and NVIDIA Docker paths
 
@@ -118,11 +120,13 @@ tracker behavior on real detections, reconnect under real failures, frozen-image
 detection, H.264/H.265 decoder behavior, actual incident evidence quality, SMTP
 delivery, sustained retention/disk-full recovery, CPU throughput, GPU latency,
 VRAM and sustainable channel count. No real camera, checkpoint, SMTP or GPU
-qualification occurred in this session. Issue #3 remains open for that evidence.
+qualification is implied by unit tests. For beta.2, actual YOLO26 detection and pose
+CPU inference passed on bundled sample imagery; real cameras, SMTP, GPU and Server2
+capacity remain unqualified. Issue #3 remains open for real multi-camera evidence.
 
 Remaining software limits include pixel-scale wrist/hip heuristic distances,
 uncalibrated risk weights, global rather than per-camera inference/threshold
 settings, no camera credential-edit form yet, no frozen-image-content watchdog,
-no FFmpeg H.264 writer, no durable alert outbox/retry, no secondary roles/password
+no durable alert outbox/retry, no secondary roles/password
 reset UI, no PostgreSQL adapter, and JSON/base64 WebSocket preview scaling.
 Typed ignore zones mask inference/preview processing but preserve original evidence.

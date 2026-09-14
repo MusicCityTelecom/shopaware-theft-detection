@@ -112,7 +112,8 @@ def main():
 def run_training(args, report):
     from ultralytics import YOLO
     name = f'camera-{uuid.uuid4().hex[:12]}'
-    model = YOLO('yolo26n.pt')
+    from shopaware.models import model_path
+    model = YOLO(model_path('yolo26n.pt'))
     model.train(data=str(args.data.resolve()), epochs=args.epochs, batch=args.batch, device=args.device,
                 project=str(args.output.resolve()), name=name, exist_ok=False, imgsz=640,
                 workers=0, seed=0, deterministic=True, plots=True)

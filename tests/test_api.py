@@ -55,6 +55,23 @@ def test_camera_api_persistence_password_and_deletion_cleanup(api):
     assert not client.get('/cameras').json()
 
 
+def test_model_initialization_retries_and_shutdown_interrupts_retry(api, monkeypatch):
+    _, backend = api
+    calls = []
+    class Stop:
+        def is_set(self): return False
+        def wait(self, seconds):
+            assert seconds == 30
+            return len(calls) >= 2
+    def unavailable():
+        calls.append(1)
+        raise OSError('Synthetic model download unavailable')
+    monkeypatch.setattr(backend, 'video_stop', Stop())
+    monkeypatch.setattr(backend, 'load_models', unavailable)
+    backend.video_loop()
+    assert len(calls) == 2
+
+
 def test_incident_list_detail_review_and_clip_update(api):
     client, backend = api
     backend.database.insert_incident(incident_id='one', camera_id='cam', camera_name='A',

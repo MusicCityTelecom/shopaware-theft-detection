@@ -9,6 +9,11 @@ fi
 APP_USER="${SUDO_USER:-root}"
 APP_GROUP="$(id -gn "${APP_USER}" 2>/dev/null || echo root)"
 
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+  echo "Install Docker Engine and the Compose plugin before preparing this host." >&2
+  exit 2
+fi
+
 install -d -m 0755 /opt/shopaware
 install -d -m 0755 /var/www/shopaware
 install -d -m 0750 /var/lib/shopaware
@@ -19,7 +24,7 @@ install -d -m 0750 \
   /var/lib/shopaware/models \
   /var/lib/shopaware/training \
   /var/lib/shopaware/runs
-install -d -m 0750 /var/backups/shopaware
+install -d -m 0700 /var/backups/shopaware
 
 chown "${APP_USER}:${APP_GROUP}" /opt/shopaware
 

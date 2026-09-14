@@ -13,12 +13,13 @@ import torch
 from ultralytics import YOLO
 
 from shopaware.tracking import CameraTrackingContext
+from shopaware.models import model_path as resolve_model_path
 
 
 def qualify(model_path: str, task: str, image, device: str, repeats: int) -> dict:
     if device.startswith('cuda') and not torch.cuda.is_available():
         raise RuntimeError('CUDA requested but unavailable; no GPU qualification performed')
-    model = YOLO(model_path)
+    model = YOLO(resolve_model_path(model_path))
     rss_before = psutil.Process().memory_info().rss
     warmup = time.perf_counter()
     for _ in range(3):

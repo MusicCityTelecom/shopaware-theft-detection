@@ -13,26 +13,26 @@ The dashboard Training page stores its curation workspace in SQLite and download
 From your workstation:
 
 ```bash
-scp ~/Downloads/shopaware-*.zip installer@server2:/tmp/shopaware-dataset.zip
+scp -P 60022 ~/Downloads/REPLACE_WITH_EXPORTED_DATASET.zip installer@50.206.74.206:shopaware-dataset.zip
 ```
 
 On server2:
 
 ```bash
-sudo mkdir -p /var/lib/shopaware/training/camera
-sudo rm -rf /var/lib/shopaware/training/camera/*
-sudo python3 -m zipfile -e /tmp/shopaware-dataset.zip /var/lib/shopaware/training/camera
-sudo rm -f /tmp/shopaware-dataset.zip
+DATASET_NAME="camera-$(date -u +%Y%m%dT%H%M%SZ)"
+sudo mkdir "/var/lib/shopaware/training/$DATASET_NAME"
+sudo python3 -m zipfile -e "$HOME/shopaware-dataset.zip" "/var/lib/shopaware/training/$DATASET_NAME"
+printf 'Dataset name: %s\n' "$DATASET_NAME"
 ```
 
-The extracted directory must contain `data.yaml`, `manifest.json`, `images/` and `labels/`.
+Connect the VPN/approved source IP first. Transfer exactly one reviewed ShopAware export, not an arbitrary ZIP. The unique directory preserves previous datasets. The extracted directory must contain `data.yaml`, `manifest.json`, `images/` and `labels/`. Keep `DATASET_NAME` in the same shell for the commands below (set it to the printed name after reconnecting).
 
 ## Validate without training
 
 ```bash
 cd /opt/shopaware
 docker compose --env-file .env -f deploy/server2/docker-compose.yml run --rm --no-deps shopaware \
-  python -m tools.train_camera --data /app/training-data/camera/data.yaml --check-only
+  python -m tools.train_camera --data "/app/training-data/$DATASET_NAME/data.yaml" --check-only
 ```
 
 Do not continue if the checker reports missing/corrupt files, invalid labels, duplicate content or split leakage.
@@ -51,7 +51,7 @@ Run training:
 ```bash
 docker compose --env-file .env -f deploy/server2/docker-compose.yml run --rm --no-deps shopaware \
   python -m tools.train_camera \
-  --data /app/training-data/camera/data.yaml \
+  --data "/app/training-data/$DATASET_NAME/data.yaml" \
   --device cpu \
   --epochs 50 \
   --batch 4
@@ -66,6 +66,8 @@ docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d
 ```
 
 CPU training can be very slow. A separate NVIDIA training machine is preferred for serious datasets.
+
+Server2 has no NVIDIA GPU. Its other services already consume most RAM. Start with a small batch (reduce `--batch 4` to `--batch 1` if needed), check `free -h` and `docker stats`, and leave live analysis stopped until the training container exits. Training is a deliberate command, not a background dashboard job. Run it in a persistent terminal session if your SSH connection is unreliable. A failed run does not replace the active model; restart the services even if training fails.
 
 ## NVIDIA training
 

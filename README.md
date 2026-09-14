@@ -38,7 +38,9 @@ The branch now adds per-camera ByteTrack isolation, local admin authentication,
 protected evidence, typed normalized zones, heuristic risk scoring, bounded media
 writers, provider-based SMTP, schema migrations, retention/quota management and
 editable runtime settings. See [deployment/setup and exact remaining limits](docs/DEPLOYMENT.md).
-Real cameras, model checkpoints and hardware still require qualification.
+Real cameras and Server2 capacity still require qualification. YOLO26 detection/pose CPU inference and tracking were checked on bundled sample imagery for this release.
+
+For the first CPU release, use the complete [Server2 deployment guide](docs/SERVER2_DEPLOYMENT.md) and [camera training instructions](docs/SERVER2_TRAINING.md). The guide targets Ubuntu and `https://shopaware.innawareucp.com`, including TLS, persistent storage, backups and rollback.
 
 The dashboard now includes **Training**, with a **Train with this camera** shortcut.
 Capture examples from a selected camera, draw object boxes, review labels and export
@@ -101,7 +103,7 @@ Default development values:
 
 The alert snapshot is annotated with the AI trigger context. The evidence clip is buffered from the original camera frames before ShopAware draws overlays.
 
-The first implementation writes an MP4 using OpenCV's portable `mp4v` path. FFmpeg/H.264/H.265 output and codec qualification remain deployment work.
+The release images encode browser MP4 evidence with FFmpeg H.264/yuv420p and fast-start metadata. Local development falls back to OpenCV `mp4v` if FFmpeg is unavailable. Source timestamps are retained alongside each clip.
 
 ## Detection model
 
@@ -190,7 +192,7 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 - [x] post-event continuation
 - [x] prototype MP4 incident clips
 - [x] dashboard clip playback
-- [ ] FFmpeg/H.264/H.265 deployment encoder
+- [x] FFmpeg H.264 browser evidence encoder
 - [x] retention/disk quota
 - [x] authenticated evidence routes
 
@@ -210,7 +212,7 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 - [ ] production reverse proxy/TLS
 - [x] documented GPU Docker override (unexecuted here)
 - [ ] SMS alert provider
-- [ ] backup/restore
+- [x] Server2 backup script and restore instructions
 
 ## Safety / operational note
 
