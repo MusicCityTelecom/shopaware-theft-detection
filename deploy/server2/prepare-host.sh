@@ -12,7 +12,13 @@ APP_GROUP="$(id -gn "${APP_USER}" 2>/dev/null || echo root)"
 install -d -m 0755 /opt/shopaware
 install -d -m 0755 /var/www/shopaware
 install -d -m 0750 /var/lib/shopaware
-install -d -m 0750 /var/lib/shopaware/data /var/lib/shopaware/alerts /var/lib/shopaware/incidents /var/lib/shopaware/models
+install -d -m 0750 \
+  /var/lib/shopaware/data \
+  /var/lib/shopaware/alerts \
+  /var/lib/shopaware/incidents \
+  /var/lib/shopaware/models \
+  /var/lib/shopaware/training \
+  /var/lib/shopaware/runs
 install -d -m 0750 /var/backups/shopaware
 
 chown "${APP_USER}:${APP_GROUP}" /opt/shopaware
@@ -41,5 +47,6 @@ Next:
   4. Build/start the server2 Compose profile.
   5. Create the first admin account.
 
+Persistent datasets/runs live in /var/lib/shopaware/training and /var/lib/shopaware/runs.
 See docs/SERVER2_DEPLOYMENT.md for exact commands.
 EOF
