@@ -38,9 +38,11 @@ if [[ -f "${STATE}/data/.shopaware.key" ]]; then
   cp --preserve=mode,timestamps "${STATE}/data/.shopaware.key" "${DEST}/.shopaware.key"
 fi
 
-if [[ -d "${STATE}/models" ]]; then
-  tar -C "${STATE}" -czf "${DEST}/models.tar.gz" models
-fi
+for directory in models training runs; do
+  if [[ -d "${STATE}/${directory}" ]]; then
+    tar -C "${STATE}" -czf "${DEST}/${directory}.tar.gz" "${directory}"
+  fi
+done
 
 if [[ "${INCLUDE_MEDIA:-0}" == "1" ]]; then
   tar -C "${STATE}" -czf "${DEST}/evidence.tar.gz" alerts incidents
@@ -54,8 +56,10 @@ fi
 cat <<EOF
 ShopAware backup created: ${DEST}
 
-Contains the online SQLite backup, the Fernet key when present, and models.
-Set INCLUDE_MEDIA=1 to include incident snapshots/clips (can be large).
+Contains the online SQLite backup, the Fernet key when present, model files,
+exported training datasets and training runs/checkpoints. Set INCLUDE_MEDIA=1 to
+also include incident snapshots/clips (can be large).
+
 Keep shopaware.db and .shopaware.key together; encrypted camera/SMTP credentials
 cannot be recovered from the database without the matching key.
 EOF
