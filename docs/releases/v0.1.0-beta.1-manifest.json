@@ -1,0 +1,18 @@
+{
+  "version": "0.1.0-beta.1",
+  "release_type": "prerelease",
+  "source_branch": "bootstrap/upstream-theftguard",
+  "source_sha": "0a59470b3027b54cc9a2b71aa8065ed0dc006ced",
+  "release_prep_sha": "505b8226e3f64d92c3af61ceb49af5d6d3be2163",
+  "upstream_reference": "vahapogut/Theft-Detection@fdba673494878d7c8bed7b324e071a209c158dff",
+  "validation": {
+    "python": "94 passed, 2 skipped, 0 failed locally on source head",
+    "dashboard_build": "passed locally on source head",
+    "dashboard_lint": "passed locally on source head",
+    "browser_training_workflow": "passed synthetic local workflow",
+    "github_actions": "not qualified on source head because account billing/spending restriction blocked jobs before steps started"
+  },
+  "hardware_qualified": false,
+  "production_qualified": false,
+  "notes": "Server2 release adds deployment assets and a same-origin production WebSocket default. Real RTSP/NVR, codec, SMTP, CPU/GPU throughput and multi-camera acceptance remain required."
+}
