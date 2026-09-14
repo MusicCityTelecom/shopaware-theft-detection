@@ -17,7 +17,13 @@ export default function CameraGrid() {
     if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
     if (typeof window === "undefined") return "ws://127.0.0.1:8000/ws";
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.hostname}:8000/ws`;
+    const hostname = window.location.hostname;
+    const local = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    // Development keeps the historical direct backend port. Production defaults
+    // to same-origin /ws so Apache/Nginx can terminate TLS and proxy WebSockets.
+    return local
+      ? `${protocol}//${hostname}:8000/ws`
+      : `${protocol}//${window.location.host}/ws`;
   }, []);
 
   useEffect(() => {
