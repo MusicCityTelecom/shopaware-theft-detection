@@ -25,6 +25,8 @@ services:
       - /var/lib/shopaware/alerts:/app/alerts
       - /var/lib/shopaware/incidents:/app/incidents
       - /var/lib/shopaware/models:/app/models
+      - /var/lib/shopaware/training:/app/training-data
+      - /var/lib/shopaware/runs:/app/runs
     stop_grace_period: 90s
     logging:
       driver: json-file
