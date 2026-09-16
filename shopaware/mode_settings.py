@@ -20,7 +20,6 @@ class ShopliftingModeSettings(_StrictSettings):
     risk_window_seconds: float = Field(default=10.0, gt=0, le=300)
     candidate_cooldown_seconds: float = Field(default=60.0, gt=0, le=3600)
     loitering_seconds: float = Field(default=12.0, gt=0, le=3600)
-    concealment_window_seconds: float = Field(default=3.0, gt=0, le=30)
 
 
 class VehicleBreakInModeSettings(_StrictSettings):
