@@ -6,7 +6,7 @@ services:
       context: ../..
       args:
         TORCH_INDEX_URL: ${SHOPAWARE_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
-    image: shopaware/backend:0.1.0-beta.5
+    image: shopaware/backend:0.1.0-beta.6
     container_name: shopaware-backend
     restart: unless-stopped
     init: true
@@ -41,7 +41,7 @@ services:
   dashboard:
     build:
       context: ../../dashboard
-    image: shopaware/dashboard:0.1.0-beta.5
+    image: shopaware/dashboard:0.1.0-beta.6
     container_name: shopaware-dashboard
     restart: unless-stopped
     init: true
