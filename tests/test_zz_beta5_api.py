@@ -70,6 +70,8 @@ def test_beta5_admin_mode_settings_validation_rejects_invalid_values(api):
         json={"name": "Validation camera", "rtsp_url": "rtsp://synthetic.invalid/live", "enabled": False},
     ).json()["camera"]
 
+    before = parse_mode_settings(backend.database.get_camera(camera["id"])["mode_settings_json"])
+
     response = admin.put(
         f"/cameras/{camera['id']}/mode-settings",
         json={"lpr": {"min_plate_chars": 10, "max_plate_chars": 4}},
@@ -84,4 +86,4 @@ def test_beta5_admin_mode_settings_validation_rejects_invalid_values(api):
 
     row = backend.database.get_camera(camera["id"])
     assert row is not None
-    assert row["mode_settings_json"] == "{}"
+    assert parse_mode_settings(row["mode_settings_json"]) == before
