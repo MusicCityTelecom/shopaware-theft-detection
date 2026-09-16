@@ -71,7 +71,7 @@ def test_vehicle_break_in_custom_thresholds_change_candidate_timing():
         assert conservative.observe([(4, person, keypoints)], [vehicle], now) == []
 
     sensitive = VehicleBreakInDetector(
-        risk_threshold=40, dwell_seconds=2, required_access_interactions=2,
+        risk_threshold=50, dwell_seconds=2, required_access_interactions=2,
         access_interval_seconds=1, quiet_seconds=90,
     )
     assert sensitive.observe([(4, person, keypoints)], [vehicle], 0) == []
