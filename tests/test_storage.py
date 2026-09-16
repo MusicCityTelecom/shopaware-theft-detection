@@ -37,3 +37,20 @@ def test_retention_missing_media_and_outside_root(tmp_path):
     status = RetentionManager(db, [root], lambda: set(), days=1).enforce(now=4_000_000_000)
     assert status['deleted'] == 1
     assert db.incident('old') is None
+
+
+def test_retention_deletes_expired_analytics_observations(tmp_path):
+    root = tmp_path / 'media'
+    root.mkdir()
+    db = Database(tmp_path / 'db')
+    db.insert_camera(camera_id='cam', name='A', rtsp_url='rtsp://host/live', username='',
+                     password_enc='', enabled=False)
+    image = root / 'observation.jpg'
+    image.write_bytes(b'x' * 100)
+    db.insert_observation(observation_id='observation', camera_id='cam', camera_name='A',
+                          mode='face_capture', subject_key='track-1', label_text='Anonymous person track',
+                          confidence=.8, snapshot_path=str(image))
+    status = RetentionManager(db, [root], lambda: set(), days=1).enforce(now=4_000_000_000)
+    assert status['deleted'] == 1
+    assert not image.exists()
+    assert db.observation('observation') is None

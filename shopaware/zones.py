@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 class Zone(BaseModel):
     id: str = Field(min_length=1, max_length=64, pattern=r'^[\w-]+$')
     name: str = Field(min_length=1, max_length=128)
-    type: Literal['merchandise', 'restricted', 'checkout', 'exit', 'ignore']
+    type: Literal['merchandise', 'restricted', 'checkout', 'exit', 'parking', 'ignore']
     points: list[tuple[float, float]] = Field(min_length=3, max_length=64)
     enabled: bool = True
 

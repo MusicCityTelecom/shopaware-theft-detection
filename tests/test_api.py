@@ -55,6 +55,32 @@ def test_camera_api_persistence_password_and_deletion_cleanup(api):
     assert not client.get('/cameras').json()
 
 
+def test_camera_modes_default_to_shoplifting_and_support_multiple_modes(api):
+    client, backend = api
+    response = client.post('/cameras', json=dict(name='Modes', rtsp_url='rtsp://host/live', enabled=False,
+                                                  modes=['lpr', 'shoplifting', 'face_capture']))
+    assert response.status_code == 201
+    camera = response.json()['camera']
+    assert camera['modes'] == ['shoplifting', 'lpr', 'face_capture']
+    assert client.put(f"/cameras/{camera['id']}/modes", json={'modes': ['vehicle_break_in', 'lpr']}).status_code == 200
+    assert client.get('/cameras').json()[0]['modes'] == ['vehicle_break_in', 'lpr']
+    row = backend.database.get_camera(camera['id'])
+    assert row['modes_json'] == '["vehicle_break_in", "lpr"]'
+    assert client.put(f"/cameras/{camera['id']}/modes", json={'modes': []}).status_code == 422
+    assert client.put(f"/cameras/{camera['id']}/modes", json={'modes': ['recognize_faces']}).status_code == 422
+
+
+def test_failed_camera_runtime_initialization_rolls_back_database_row(api, monkeypatch):
+    client, backend = api
+    class BrokenAnalytics:
+        def __init__(self):
+            raise RuntimeError('Synthetic analytics initialization failure')
+    monkeypatch.setattr(backend, 'PlateReader', BrokenAnalytics)
+    response = client.post('/cameras', json=dict(name='Rollback', rtsp_url='rtsp://host/live', enabled=False))
+    assert response.status_code == 400
+    assert backend.database.list_cameras() == []
+
+
 def test_model_initialization_retries_and_shutdown_interrupts_retry(api, monkeypatch):
     _, backend = api
     calls = []

@@ -48,6 +48,8 @@ jobs:
     if: startsWith(github.ref, 'refs/heads/release/')
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Prepare isolated release state
@@ -70,6 +72,16 @@ jobs:
           docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d --force-recreate --wait --wait-timeout 300
           sudo sha256sum --check /tmp/shopaware-key.sha256
           docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -m tools.check_runtime
+      - name: Publish validated prerelease
+        if: github.ref == 'refs/heads/release/v0.1.0-beta.4'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v0.1.0-beta.4 >/dev/null 2>&1 || gh release create v0.1.0-beta.4 \
+            --target "$GITHUB_SHA" \
+            --title "ShopAware v0.1.0-beta.4" \
+            --notes-file docs/releases/v0.1.0-beta.4.md \
+            --prerelease
       - name: Logs
         if: always()
         run: docker compose --env-file .env -f deploy/server2/docker-compose.yml logs --tail=100

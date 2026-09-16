@@ -40,6 +40,13 @@ MIGRATIONS = {
         "CREATE TABLE user_camera_access (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE, PRIMARY KEY(user_id,camera_id))",
         "CREATE TABLE user_group_access (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, group_id TEXT NOT NULL REFERENCES camera_groups(id) ON DELETE CASCADE, PRIMARY KEY(user_id,group_id))",
     ],
+    5: [
+        "ALTER TABLE cameras ADD COLUMN modes_json TEXT NOT NULL DEFAULT '[\"shoplifting\"]'",
+        "CREATE TABLE observations (id TEXT PRIMARY KEY, camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE, camera_name TEXT NOT NULL, group_id TEXT, access_epoch INTEGER NOT NULL DEFAULT 0, mode TEXT NOT NULL CHECK(mode IN ('lpr','face_capture')), observed_at TEXT NOT NULL, subject_key TEXT NOT NULL, label_text TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0, snapshot_path TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}')",
+        "CREATE INDEX idx_observations_camera_time ON observations(camera_id, observed_at DESC)",
+        "CREATE INDEX idx_observations_mode_time ON observations(mode, observed_at DESC)",
+        "CREATE INDEX idx_observations_subject ON observations(subject_key, observed_at DESC)",
+    ],
 }
 
 

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { apiBase, apiFetch } from "@/lib/api";
 
 type Zone = { id: string; name: string; type: string; points: [number, number][]; enabled: boolean };
-const types = ["merchandise", "restricted", "checkout", "exit", "ignore"];
+const types = ["merchandise", "restricted", "checkout", "exit", "parking", "ignore"];
 
 export default function ZoneEditor({ cameraId }: { cameraId: string }) {
   const [zones, setZones] = useState<Zone[]>([]);

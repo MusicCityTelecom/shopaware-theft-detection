@@ -1,6 +1,6 @@
 # ShopAware Theft Detection
 
-ShopAware is a web-based retail video analytics project for ingesting RTSP camera streams, running computer-vision inference, identifying suspected theft/concealment events, preserving incident evidence, and sending real-time alerts.
+ShopAware is a web-based video analytics project for ingesting RTSP camera streams, running computer-vision inference, recording review candidates and observations, preserving incident evidence, and sending real-time alerts.
 
 > **Project status:** Early development / proof-of-concept. Do not treat detections as proof of theft. Human review is required before intervention or accusation.
 
@@ -23,6 +23,10 @@ The current bootstrap includes:
 - masked camera URLs in normal API responses
 - configurable YOLO26 detection and pose model paths
 - upstream-compatible item/hand/hip concealment signals with conservative incident language
+- independently selectable Shoplifting, Vehicle break-in, LPR and Face Capture modes per camera
+- confidence-scored plate OCR snapshots and broad vehicle-color estimates
+- anonymous face snapshots grouped only by a continuous per-camera track
+- temporal person/vehicle interaction candidates for parking-lot review
 - SQLite camera and incident persistence
 - annotated incident snapshots
 - rolling pre-event frame buffers
@@ -40,7 +44,7 @@ writers, provider-based SMTP, schema migrations, retention/quota management and
 editable runtime settings. See [deployment/setup and exact remaining limits](docs/DEPLOYMENT.md).
 Real cameras and Server2 capacity still require qualification. YOLO26 detection/pose CPU inference and tracking were checked on bundled sample imagery for this release.
 
-For the first CPU release, use the complete [Server2 deployment guide](docs/SERVER2_DEPLOYMENT.md) and [camera training instructions](docs/SERVER2_TRAINING.md). The guide targets Ubuntu and `https://shopaware.innawareucp.com`, including TLS, persistent storage, backups and rollback.
+For Server2, use the complete [deployment guide](docs/SERVER2_DEPLOYMENT.md), [beta.4 upgrade procedure](docs/SERVER2_BETA4_UPGRADE.md), [camera-mode guide](docs/CAMERA_MODES.md), and [camera training instructions](docs/SERVER2_TRAINING.md).
 
 The dashboard now includes **Training**, with a **Train with this camera** shortcut.
 Capture examples from a selected camera, draw object boxes, review labels and export
@@ -204,6 +208,12 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 - [ ] YOLO26n/s/m benchmarking
 - [x] camera-selected capture, annotation and dataset export workflow
 - [ ] ShopAware-specific trained model
+- [x] multiple independently selectable analytics modes per camera
+- [x] baseline CPU plate OCR and anonymous per-track face capture
+- [x] explainable vehicle-interaction review candidates
+- [ ] qualified plate detector/OCR benchmark for target camera angles and jurisdictions
+- [ ] qualified vehicle make/model classifier
+- [ ] real parking-lot break-in validation dataset and calibrated thresholds
 
 ### Production hardening
 - [x] local admin authentication
@@ -216,7 +226,7 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 
 ## Safety / operational note
 
-ShopAware is a loss-prevention decision-support system. Computer-vision detections are probabilistic and can be wrong. A trained human should review incident evidence before taking action.
+ShopAware is a security decision-support system. Computer-vision detections, OCR text, color estimates, and behavior scores are probabilistic and can be wrong. A trained human should review evidence before taking action. Follow applicable notice, privacy, biometric, retention, and employment laws.
 
 ### Users and customer access
 

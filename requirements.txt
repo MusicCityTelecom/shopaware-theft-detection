@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 websockets
-opencv-python
+opencv-python>=4.10,<5
 ultralytics==8.4.150
 numpy
 lapx
@@ -10,5 +10,6 @@ python-dotenv
 psutil
 pydantic
 python-multipart
+pytesseract>=0.3.13,<0.4
 cryptography
 argon2-cffi>=25.1,<26

@@ -1,4 +1,4 @@
-# Deploy ShopAware v0.1.0-beta.3 on Server2
+# Deploy ShopAware v0.1.0-beta.4 on Server2
 
 This guide installs the CPU release at **https://shopaware.innawareucp.com**. Run the commands on Server2 as `installer`, using `sudo` where shown. No deployment was performed by the release review.
 
@@ -26,7 +26,7 @@ On Server2:
 cd /opt/shopaware
 git status --short --branch
 git fetch origin --tags
-git switch --detach v0.1.0-beta.3
+git switch --detach v0.1.0-beta.4
 cat VERSION
 docker compose version
 free -h
@@ -34,7 +34,7 @@ df -h /var/lib/shopaware
 sudo ss -ltnp '( sport = :18081 or sport = :18082 )'
 ```
 
-`VERSION` must print `0.1.0-beta.3`; both ports must be free. If Git reports local changes, preserve and review them before switching; do not reset the checkout. If the checkout is absent on a replacement host, clone `git@github.com:MusicCityTelecom/shopaware-theft-detection.git` into `/opt/shopaware` using an account/key with repository access. Docker is already installed on Server2; replacement hosts can follow [Docker's Ubuntu installation instructions](https://docs.docker.com/engine/install/ubuntu/).
+`VERSION` must print `0.1.0-beta.4`; both ports must be free. If Git reports local changes, preserve and review them before switching; do not reset the checkout. If the checkout is absent on a replacement host, clone `git@github.com:MusicCityTelecom/shopaware-theft-detection.git` into `/opt/shopaware` using an account/key with repository access. Docker is already installed on Server2; replacement hosts can follow [Docker's Ubuntu installation instructions](https://docs.docker.com/engine/install/ubuntu/).
 
 ## 2. Prepare directories and configuration
 
@@ -70,7 +70,7 @@ The persistent directories are:
 | Host path | Container path | Contents |
 | --- | --- | --- |
 | `/var/lib/shopaware/data` | `/app/data` | SQLite database, encryption key, Ultralytics settings |
-| `/var/lib/shopaware/alerts` | `/app/alerts` | Incident snapshots |
+| `/var/lib/shopaware/alerts` | `/app/alerts` | Incident, plate and face snapshots |
 | `/var/lib/shopaware/incidents` | `/app/incidents` | MP4 clips and timestamp sidecars |
 | `/var/lib/shopaware/models` | `/app/models` | Downloaded and qualified checkpoints |
 | `/var/lib/shopaware/training` | `/app/training-data` | Exported datasets |
@@ -90,7 +90,7 @@ curl --fail http://127.0.0.1:18082/health/live
 curl --fail http://127.0.0.1:18081/api/health/live
 ```
 
-The first build downloads packages; the first backend start downloads standard YOLO26 checkpoints into `/var/lib/shopaware/models`. Model initialization retries after transient download failures. Liveness only proves the process is serving requests; it does not prove the models are ready. One backend process owns the cameras; do not scale its workers or replicas.
+The first build downloads packages, including Tesseract OCR; the first backend start downloads standard YOLO26 checkpoints into `/var/lib/shopaware/models`. Model initialization retries after transient download failures. Liveness only proves the process is serving requests; it does not prove the models are ready. One backend process owns the cameras; do not scale its workers or replicas.
 
 Run the packaged installation check after startup:
 
@@ -98,7 +98,7 @@ Run the packaged installation check after startup:
 docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -m tools.check_runtime
 ```
 
-It checks database integrity, key readability, actual H.264 encoding, and real detection/pose CPU inference on Ultralytics' bundled sample image. It creates no accounts, cameras or incidents. Expect version `0.1.0-beta.3`, codec `h264`, and `cpu_inference: passed`. This check can briefly compete with live inference; run it before adding cameras.
+It checks database integrity, key readability, actual H.264 encoding, and real detection/pose CPU inference on Ultralytics' bundled sample image. It creates no accounts, cameras or incidents. Expect version `0.1.0-beta.4`, codec `h264`, and `cpu_inference: passed`. This check can briefly compete with live inference; run it before adding cameras.
 
 ## 4. Create your administrator
 
@@ -162,12 +162,14 @@ Open **https://shopaware.innawareucp.com**, sign in, and:
 1. Confirm Health shows models ready and recording codec `h264`.
 2. Add one camera under Cameras. Enter the RTSP URL without credentials; use the separate username/password fields. Start with a low-resolution substream.
 3. Test connection, enable the camera, and verify live WebSocket preview.
-4. Draw merchandise, checkout, exit, restricted and ignore zones as appropriate.
+4. Select one or more modes on the camera. Existing cameras start with Shoplifting only. Draw merchandise, checkout, exit, restricted, parking and ignore zones as appropriate.
 5. Stage normal browsing and consented example actions. Inspect candidate incidents, original pre/post-event video, seeking/playback and review status.
 6. Configure SMTP if wanted, trigger an authorized test, and confirm actual delivery.
 7. Disconnect/reconnect the camera, restart the backend, and confirm settings, camera credentials and evidence persist.
 
 Add a second stream only after checking CPU, RAM, frame age and event latency. Real two-camera tracker qualification remains tracked in issue #3. Risk scores are heuristic and require human review.
+
+See [Camera analytics modes](CAMERA_MODES.md) for mode-specific setup, privacy boundaries, current make/model limitation, and the requirement to validate each camera angle. If upgrading an existing Server2 beta.3 installation, follow the shorter [beta.4 upgrade procedure](SERVER2_BETA4_UPGRADE.md).
 
 ## 7. Train using a selected camera
 

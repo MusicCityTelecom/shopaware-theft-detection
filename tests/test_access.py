@@ -79,6 +79,7 @@ def test_camera_history_health_and_media_are_customer_scoped(customers):
     ('GET', '/training?camera_id=test'), ('GET', '/training/export?camera_id=test'),
     ('GET', '/training/samples/test/image'), ('POST', '/training/sessions'), ('POST', '/cameras'),
     ('DELETE', '/cameras/test'), ('PUT', '/cameras/test/enabled'), ('PUT', '/cameras/test/group'),
+    ('PUT', '/cameras/test/modes'),
     ('POST', '/cameras/test/test'), ('GET', '/cameras/test/zones'), ('PUT', '/cameras/test/zones'),
     ('POST', '/cameras/test/roi'), ('GET', '/alerts/test.jpg'), ('GET', '/incident-media/test.mp4')])
 def test_regular_user_cannot_reach_admin_or_legacy_routes(api, method, path):
@@ -174,6 +175,24 @@ def test_group_grants_include_future_cameras_and_empty_group_ids_are_rejected(cu
                                       'enabled': False, 'group_id': ''}).status_code == 422
 
 
+def test_observations_and_snapshots_follow_camera_customer_access(customers, tmp_path):
+    admin, backend, _, cameras, _, user = customers
+    for index, camera in enumerate(cameras):
+        image = tmp_path / f'observation-{index}.jpg'
+        image.write_bytes(f'face {index}'.encode())
+        backend.database.insert_observation(
+            observation_id=f'observation-{index}', camera_id=camera, camera_name=f'Camera {index}',
+            mode='face_capture', subject_key=f'track-{index}', label_text='Anonymous person track',
+            confidence=.75, snapshot_path=str(image), metadata={'biometric_identification': False},
+        )
+    rows = user.get('/observations').json()
+    assert [row['id'] for row in rows] == ['observation-0']
+    assert rows[0]['snapshot_path'] == 'snapshot'
+    assert user.get('/observations/observation-0/snapshot').content == b'face 0'
+    assert user.get('/observations/observation-1/snapshot').status_code == 404
+    assert len(admin.get('/observations').json()) == 2
+
+
 def test_v3_upgrade_preserves_users_credentials_cameras_and_invalidates_old_sessions(tmp_path, monkeypatch):
     from shopaware import migrations
     all_migrations = migrations.MIGRATIONS
@@ -192,8 +211,11 @@ def test_v3_upgrade_preserves_users_credentials_cameras_and_invalidates_old_sess
     assert auth.session('oldtoken') is None
     assert auth.login('original', PASSWORD, 'local')[1]['id'] == uid
     assert new.get_camera('old')['password_enc'] == 'preserve-ciphertext'
+    assert new.get_camera('old')['modes_json'] == '["shoplifting"]'
     assert new.incident('old')['snapshot_path'] == 'preserve.jpg'
     with new.connect() as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 5
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='observations'").fetchone()
         assert not conn.execute('PRAGMA foreign_key_check').fetchall()
 
 

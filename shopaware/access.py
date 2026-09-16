@@ -43,6 +43,34 @@ class AccessControl:
             return conn.execute(f'''SELECT 1 FROM incidents i JOIN cameras c ON c.id=i.camera_id
                 WHERE i.id=? AND i.group_id IS c.group_id AND i.access_epoch=c.access_epoch AND {scope}''', [incident_id, *args]).fetchone() is not None
 
+    def can_observation(self, user, observation_id):
+        if user['role'] == 'admin':
+            return True
+        scope, args = self.scope(user)
+        with self.connection() as conn:
+            return conn.execute(f'''SELECT 1 FROM observations o JOIN cameras c ON c.id=o.camera_id
+                WHERE o.id=? AND o.group_id IS c.group_id AND o.access_epoch=c.access_epoch AND {scope}''',
+                [observation_id, *args]).fetchone() is not None
+
+    def observations(self, user, limit, mode=None):
+        scope, args = self.scope(user)
+        if user['role'] != 'admin':
+            scope += ' AND o.group_id IS c.group_id AND o.access_epoch=c.access_epoch'
+        mode_clause = ' AND o.mode=?' if mode else ''
+        if mode:
+            args.append(mode)
+        with self.connection() as conn:
+            rows = conn.execute(f'''SELECT o.*,g.name AS group_name FROM observations o
+                LEFT JOIN cameras c ON c.id=o.camera_id LEFT JOIN camera_groups g ON g.id=o.group_id
+                WHERE {scope}{mode_clause} ORDER BY o.observed_at DESC LIMIT ?''', [*args, limit]).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item['metadata'] = json.loads(item.pop('metadata_json') or '{}')
+            item['snapshot_path'] = 'snapshot' if item['snapshot_path'] else None
+            result.append(item)
+        return result
+
     def history(self, user, limit):
         scope, args = self.scope(user)
         if user['role'] != 'admin':

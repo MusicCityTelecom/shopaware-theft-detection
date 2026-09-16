@@ -33,6 +33,15 @@ from ultralytics import YOLO
 from shopaware import __version__
 from shopaware.models import model_path
 from shopaware.media import media_writer
+from shopaware.analytics import (
+    CAMERA_MODES,
+    DEFAULT_CAMERA_MODES,
+    VEHICLE_CLASS_IDS,
+    FaceCapture,
+    PlateReader,
+    VehicleBreakInDetector,
+    normalize_modes,
+)
 
 from shopaware.ingest import ThreadedCamera
 from shopaware.tracking import CameraTrackingContext
@@ -108,10 +117,21 @@ class CameraInput(BaseModel):
     password: str = Field(default="", max_length=1024)
     enabled: bool = True
     group_id: str | None = Field(default=None, min_length=1, max_length=128)
+    modes: list[str] = Field(default_factory=lambda: list(DEFAULT_CAMERA_MODES), min_length=1, max_length=len(CAMERA_MODES))
 
     @model_validator(mode="after")
     def validate_url(self) -> "CameraInput":
         self.rtsp_url = clean_camera_url(self.rtsp_url)
+        self.modes = normalize_modes(self.modes)
+        return self
+
+
+class CameraModesInput(BaseModel):
+    modes: list[str] = Field(min_length=1, max_length=len(CAMERA_MODES))
+
+    @model_validator(mode="after")
+    def validate_modes(self) -> "CameraModesInput":
+        self.modes = normalize_modes(self.modes)
         return self
 
 
@@ -174,6 +194,10 @@ class CameraManager:
         password = secrets.decrypt(row["password_enc"])
         runtime_url = build_runtime_url(row["rtsp_url"], row["username"], password)
         recorder = self._make_recorder(row["id"])
+        try:
+            modes = normalize_modes(json.loads(row["modes_json"] or "[]"))
+        except (KeyError, TypeError, json.JSONDecodeError, ValueError):
+            modes = list(DEFAULT_CAMERA_MODES)
         return {
             "id": row["id"],
             "group_id": row['group_id'],
@@ -184,6 +208,7 @@ class CameraManager:
             "has_password": bool(password),
             "roi_points": json.loads(row["roi_json"] or "[]"),
             "enabled": bool(row["enabled"]),
+            "modes": modes,
             "cap": ThreadedCamera(runtime_url, on_frame=recorder.push) if row["enabled"] else None,
             "runtime_url": runtime_url,
             "recorder": recorder,
@@ -196,6 +221,10 @@ class CameraManager:
             "last_alert_time": 0.0,
             "last_objects": [],
             "roi_entry_times": {},
+            "plate_reader": PlateReader(),
+            "face_capture": FaceCapture(),
+            "break_in": VehicleBreakInDetector(),
+            "last_detections": [],
         }
 
     def load_cameras(self) -> None:
@@ -209,7 +238,7 @@ class CameraManager:
     def add_camera(self, camera: CameraInput) -> str:
         camera_id = str(uuid.uuid4())
         clean_url = clean_camera_url(camera.rtsp_url)
-        row = database.insert_camera(
+        database.insert_camera(
             camera_id=camera_id,
             name=camera.name,
             rtsp_url=clean_url,
@@ -218,8 +247,14 @@ class CameraManager:
             enabled=camera.enabled,
             group_id=camera.group_id,
         )
-        with self.lock:
-            self.cameras[camera_id] = self._row_to_runtime(row)
+        try:
+            database.set_camera_modes(camera_id, camera.modes)
+            row = database.get_camera(camera_id)
+            with self.lock:
+                self.cameras[camera_id] = self._row_to_runtime(row)
+        except Exception:
+            database.delete_camera(camera_id)
+            raise
         return camera_id
 
     def remove_camera(self, camera_id: str) -> bool:
@@ -279,6 +314,7 @@ class CameraManager:
                         "status": status if status in {"disabled", "active"} else (cap.status if cap else "error"),
                         "last_frame_at": cap.last_frame_at if cap else None,
                         "enabled": cam["enabled"],
+                        "modes": list(cam.get("modes", DEFAULT_CAMERA_MODES)),
                         "roi_points": cam.get("roi_points", []),
                         "recording": recorder.stats() if recorder else None,
                     }
@@ -402,6 +438,39 @@ def trigger_incident(
     return incident_id
 
 
+def save_observation(
+    camera_id: str,
+    camera_name: str,
+    mode: str,
+    subject_key: str,
+    label_text: str,
+    confidence: float,
+    crop: np.ndarray,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    observation_id = str(uuid.uuid4())
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+    filename = ALERT_DIR / f"observation_{mode}_{camera_id}_{timestamp}.jpg"
+    if crop.size == 0 or not cv2.imwrite(str(filename), crop):
+        raise RuntimeError("Analytics snapshot could not be written")
+    try:
+        database.insert_observation(
+            observation_id=observation_id,
+            camera_id=camera_id,
+            camera_name=camera_name,
+            mode=mode,
+            subject_key=subject_key,
+            label_text=label_text,
+            confidence=confidence,
+            snapshot_path=str(filename),
+            metadata=metadata,
+        )
+    except Exception:
+        filename.unlink(missing_ok=True)
+        raise
+    return observation_id
+
+
 def set_alert_status(incident_id: str, status: str) -> None:
     conn = database.connect()
     try:
@@ -449,12 +518,18 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
     if not ret or frame is None:
         encode_frame = no_signal.copy()
     else:
+        modes = set(cam.get("modes", DEFAULT_CAMERA_MODES))
+        shoplifting_enabled = "shoplifting" in modes
         resolution = frame.shape[:2]
         if context.generation != generation or context.resolution != resolution:
             context.reset(generation, resolution)
             cam["roi_entry_times"].clear()
             cam["last_objects"] = []
+            cam["last_detections"] = []
             cam["risk"] = RiskEngine(threshold=float(os.getenv("SHOPAWARE_RISK_THRESHOLD", "65")))
+            cam["plate_reader"] = PlateReader()
+            cam["face_capture"] = FaceCapture()
+            cam["break_in"] = VehicleBreakInDetector()
         # Preserve original evidence before annotations are drawn.
         # Evidence is sampled by capture before inference/annotations.
         now = captured_at
@@ -470,16 +545,20 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
         pose_results = model_pose.predict(inference_frame, verbose=False, classes=[0], conf=0.1)
         pose_results = [context.update(pose_results[0], now)]
         detected_objects: list[np.ndarray] = cam.get("last_objects", [])
+        detections: list[dict[str, Any]] = cam.get("last_detections", [])
+        vehicle_boxes = [item["box"] for item in detections if item["class_id"] in VEHICLE_CLASS_IDS]
 
         if run_obj:
             detected_objects = []
+            detections = []
+            vehicle_boxes = []
             obj_results = model_obj(inference_frame, verbose=False, conf=0.30)
             if obj_results:
                 boxes = obj_results[0].boxes.xyxy.cpu().numpy().astype(int)
                 classes = obj_results[0].boxes.cls.cpu().numpy().astype(int)
                 confidences = obj_results[0].boxes.conf.cpu().numpy()
 
-                if model_is_specialized:
+                if model_is_specialized and shoplifting_enabled:
                     for box, cls_id, confidence in zip(boxes, classes, confidences):
                         class_name = str(model_obj.names[int(cls_id)]).lower()
                         if any(token in class_name for token in ("shoplift", "suspicious", "theft", "conceal")):
@@ -510,16 +589,20 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                                     },
                                 )
                                 cam["last_alert_time"] = now
-                else:
+                elif not model_is_specialized:
                     # Upstream-compatible COCO classes used only as a weak interaction signal.
                     target_classes = {
                         24, 25, 26, 28, 39, 40, 41, 42, 43,
                         67, 73, 74, 75, 76, 77, 78, 79,
                     }
                     for box, cls_id, confidence in zip(boxes, classes, confidences):
-                        if int(cls_id) in target_classes:
+                        cls_id = int(cls_id)
+                        detections.append({"box": box, "class_id": cls_id, "confidence": float(confidence)})
+                        if cls_id in VEHICLE_CLASS_IDS:
+                            vehicle_boxes.append(box)
+                        if shoplifting_enabled and cls_id in target_classes:
                             detected_objects.append(box)
-                            label = f"ITEM {model_obj.names[int(cls_id)]} {confidence:.2f}"
+                            label = f"ITEM {model_obj.names[cls_id]} {confidence:.2f}"
                             cv2.rectangle(frame, tuple(box[:2]), tuple(box[2:]), (0, 165, 255), 2)
                             cv2.putText(
                                 frame,
@@ -531,7 +614,10 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                                 1,
                             )
                     cam["last_objects"] = detected_objects
+                    cam["last_detections"] = detections
 
+        people_for_face: list[tuple[int, np.ndarray]] = []
+        people_for_break_in: list[tuple[int, np.ndarray, np.ndarray]] = []
         if pose_results and pose_results[0].boxes.id is not None:
             person_boxes = pose_results[0].boxes.xyxy.cpu().numpy().astype(int)
             track_ids = pose_results[0].boxes.id.cpu().numpy().astype(int)
@@ -552,6 +638,10 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                     confidence = pose_results[0].keypoints.conf[idx].cpu().numpy()
                     keypoints = keypoints.copy()
                     keypoints[confidence < 0.5] = 0
+                people_for_face.append((int(track_id), box))
+                people_for_break_in.append((int(track_id), box, keypoints))
+                if not shoplifting_enabled:
+                    continue
                 state = context.person(int(track_id), now)
                 point = (float((box[0] + box[2]) / 2 / frame.shape[1]), float(box[3] / frame.shape[0]))
                 if any(z.type == 'ignore' and z.contains(point) for z in cam['zones']):
@@ -696,6 +786,64 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                         1,
                     )
 
+        if "vehicle_break_in" in modes and not model_is_specialized:
+            parking_zones = [zone for zone in cam['zones'] if zone.enabled and zone.type == 'parking']
+            scoped_vehicles = vehicle_boxes
+            if parking_zones:
+                scoped_vehicles = [box for box in vehicle_boxes if any(zone.contains((
+                    float((box[0] + box[2]) / 2 / frame.shape[1]),
+                    float((box[1] + box[3]) / 2 / frame.shape[0]),
+                )) for zone in parking_zones)]
+            for candidate in cam["break_in"].observe(people_for_break_in, scoped_vehicles, now):
+                trigger_incident(
+                    camera_id,
+                    cam["name"],
+                    candidate["event_type"],
+                    "Person and vehicle interaction patterns require human review; this is not proof of a break-in.",
+                    candidate["risk_score"],
+                    frame,
+                    now,
+                    candidate["metadata"],
+                )
+
+        if "lpr" in modes and run_obj and not model_is_specialized:
+            for observation in cam["plate_reader"].observe(inference_frame, vehicle_boxes, now):
+                save_observation(
+                    camera_id,
+                    cam["name"],
+                    "lpr",
+                    observation.plate,
+                    observation.plate,
+                    observation.confidence,
+                    observation.crop,
+                    {
+                        "ocr_kind": "tesseract_candidate",
+                        "vehicle_color": observation.vehicle_color,
+                        "vehicle_color_confidence": observation.color_confidence,
+                        "vehicle_make": None,
+                        "vehicle_model": None,
+                    },
+                )
+
+        if "face_capture" in modes:
+            for observation in cam["face_capture"].observe(
+                inference_frame, people_for_face, generation, now
+            ):
+                save_observation(
+                    camera_id,
+                    cam["name"],
+                    "face_capture",
+                    f"{camera_id}:{observation.subject_key}",
+                    "Anonymous person track",
+                    observation.confidence,
+                    observation.crop,
+                    {
+                        "grouping": "continuous_camera_track_only",
+                        "quality": observation.quality,
+                        "biometric_identification": False,
+                    },
+                )
+
         for zone in cam['zones']:
             if zone.enabled:
                 polygon = np.array([(x * frame.shape[1], y * frame.shape[0]) for x, y in zone.points], dtype=np.int32)
@@ -837,10 +985,11 @@ async def require_authentication(request: Request, call_next):
             return JSONResponse(status_code=403, content={'detail': 'CSRF token required'})
     if session is not None and session['role'] != 'admin' and request.url.path != '/auth/login':
         path, method = request.url.path, request.method
-        allowed = (method in {'GET', 'HEAD'} and path in {'/auth/session', '/cameras', '/history', '/health', '/health/ready', '/groups'}) or (method == 'POST' and path in {'/auth/logout', '/auth/password'})
+        allowed = (method in {'GET', 'HEAD'} and path in {'/auth/session', '/cameras', '/history', '/observations', '/health', '/health/ready', '/groups'}) or (method == 'POST' and path in {'/auth/logout', '/auth/password'})
         access = AccessControl(database)
         camera_match = re.fullmatch(r'/cameras/([^/]+)/frame', path)
         incident_match = re.fullmatch(r'/incidents/([^/]+)(/media/(?:snapshot|clip)|/review)?', path)
+        observation_match = re.fullmatch(r'/observations/([^/]+)/snapshot', path)
         if camera_match and method in {'GET', 'HEAD'}:
             if camera_match[1] not in access.cameras(session):
                 return JSONResponse(status_code=404, content={'detail': 'Camera not found'})
@@ -848,6 +997,10 @@ async def require_authentication(request: Request, call_next):
         if incident_match and ((method in {'GET', 'HEAD'} and incident_match[2] != '/review') or (method == 'POST' and incident_match[2] == '/review')):
             if not access.can_incident(session, incident_match[1]):
                 return JSONResponse(status_code=404, content={'detail': 'Incident not found'})
+            allowed = True
+        if observation_match and method in {'GET', 'HEAD'}:
+            if not access.can_observation(session, observation_match[1]):
+                return JSONResponse(status_code=404, content={'detail': 'Observation not found'})
             allowed = True
         if not allowed:
             return JSONResponse(status_code=403, content={'detail': 'Administrator access required'})
@@ -946,6 +1099,25 @@ def incident_media(incident_id: str, kind: str):
     if not path.is_relative_to(root) or not path.is_file():
         raise HTTPException(404, 'Media not available')
     return FileResponse(path, media_type='image/jpeg' if kind == 'snapshot' else 'video/mp4')
+
+
+@app.get('/observations')
+def observations(request: Request, limit: int = 300, mode: str | None = None):
+    if mode not in {None, 'lpr', 'face_capture'}:
+        raise HTTPException(422, 'mode must be lpr or face_capture')
+    return AccessControl(database).observations(request.state.session, min(max(limit, 1), 1000), mode)
+
+
+@app.get('/observations/{observation_id}/snapshot')
+def observation_snapshot(observation_id: str):
+    observation = database.observation(observation_id)
+    if not observation or not observation.get('snapshot_path'):
+        raise HTTPException(404, 'Observation not found')
+    path = Path(observation['snapshot_path']).resolve()
+    root = ALERT_DIR.resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(404, 'Observation image not available')
+    return FileResponse(path, media_type='image/jpeg')
 
 
 app.add_middleware(
@@ -1075,6 +1247,27 @@ def enable_camera(camera_id: str, payload: EnabledInput):
         with camera_manager.lock:
             camera_manager.cameras[camera_id] = camera_manager._row_to_runtime(row)
     return {'enabled': payload.enabled}
+
+
+@app.put('/cameras/{camera_id}/modes')
+def set_camera_modes(camera_id: str, payload: CameraModesInput):
+    with camera_lifecycle_lock:
+        with camera_manager.lock:
+            camera = camera_manager.cameras.get(camera_id)
+            if camera is None:
+                raise HTTPException(404, 'Camera not found')
+        plate_reader, face_capture, break_in = PlateReader(), FaceCapture(), VehicleBreakInDetector()
+        context = camera['tracking']
+        with context.lock:
+            if not database.set_camera_modes(camera_id, payload.modes):
+                raise HTTPException(404, 'Camera not found')
+            camera['modes'] = payload.modes
+            camera['risk'] = RiskEngine(threshold=float(os.getenv('SHOPAWARE_RISK_THRESHOLD', '65')))
+            camera['plate_reader'] = plate_reader
+            camera['face_capture'] = face_capture
+            camera['break_in'] = break_in
+            context.reset(-1, None)
+    return {'modes': payload.modes}
 
 
 def training_frame(camera_id: str):

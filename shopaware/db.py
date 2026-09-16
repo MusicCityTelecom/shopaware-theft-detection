@@ -129,6 +129,18 @@ class Database:
         finally:
             conn.close()
 
+    def set_camera_modes(self, camera_id: str, modes: list[str]) -> bool:
+        conn = self.connect()
+        try:
+            cur = conn.execute(
+                "UPDATE cameras SET modes_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(modes), utc_now_iso(), camera_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
     def insert_incident(
         self,
         *,
@@ -168,6 +180,63 @@ class Database:
             conn.commit()
         finally:
             conn.close()
+
+    def insert_observation(
+        self,
+        *,
+        observation_id: str,
+        camera_id: str,
+        camera_name: str,
+        mode: str,
+        subject_key: str,
+        label_text: str,
+        confidence: float,
+        snapshot_path: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        conn = self.connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO observations(
+                    id,camera_id,camera_name,group_id,access_epoch,mode,observed_at,
+                    subject_key,label_text,confidence,snapshot_path,metadata_json
+                ) VALUES(?,?,?,(SELECT group_id FROM cameras WHERE id=?),
+                    COALESCE((SELECT access_epoch FROM cameras WHERE id=?),0),?,?,?,?,?,?,?)
+                """,
+                (
+                    observation_id,
+                    camera_id,
+                    camera_name,
+                    camera_id,
+                    camera_id,
+                    mode,
+                    utc_now_iso(),
+                    subject_key,
+                    label_text,
+                    float(max(0.0, min(1.0, confidence))),
+                    snapshot_path,
+                    json.dumps(metadata or {}),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def observation(self, observation_id: str) -> dict[str, Any] | None:
+        conn = self.connect()
+        try:
+            row = conn.execute("SELECT * FROM observations WHERE id=?", (observation_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.pop("metadata_json", "{}") or "{}")
+        except json.JSONDecodeError:
+            item["metadata"] = {}
+        return item
 
     def set_incident_clip(self, incident_id: str, clip_path: str) -> bool:
         conn = self.connect()

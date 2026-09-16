@@ -62,6 +62,25 @@ class RetentionManager:
                     failures += 1
                     logger.warning('Retention deletion deferred', extra={'incident_id': row['id']})
                 used = self.usage()
+
+            observations = conn.execute("SELECT * FROM observations ORDER BY observed_at ASC").fetchall()
+            for row in observations:
+                expired = datetime.fromisoformat(row['observed_at']).timestamp() < now - self.days * 86400
+                if not expired and used <= self.max_bytes:
+                    continue
+                path = Path(row['snapshot_path']).resolve()
+                if not any(path.is_relative_to(root) for root in self.roots):
+                    raise ValueError('Observation media path is outside configured roots')
+                try:
+                    path.unlink(missing_ok=True)
+                    conn.execute('DELETE FROM observations WHERE id=?', (row['id'],))
+                    conn.commit()
+                    deleted += 1
+                except OSError:
+                    conn.rollback()
+                    failures += 1
+                    logger.warning('Observation retention deletion deferred', extra={'observation_id': row['id']})
+                used = self.usage()
         finally:
             conn.close()
         return dict(bytes_used=used, max_bytes=self.max_bytes, quota_exceeded=used > self.max_bytes,

@@ -22,8 +22,15 @@ type CameraRow = {
   enabled: boolean;
   last_frame_at?: number;
   roi_points: number[][];
+  modes: string[];
 };
 
+const modeOptions = [
+  { id: "shoplifting", label: "Shoplifting", detail: "Retail interaction and concealment candidates" },
+  { id: "vehicle_break_in", label: "Vehicle break-in", detail: "Person/vehicle interaction candidates" },
+  { id: "lpr", label: "LPR", detail: "Plate OCR snapshots and estimated vehicle color" },
+  { id: "face_capture", label: "Face capture", detail: "Anonymous face snapshots grouped by continuous track" },
+];
 
 
 export default function CamerasPage() {
@@ -43,6 +50,7 @@ export default function CamerasPage() {
   const [rtspUrl, setRtspUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [newModes, setNewModes] = useState<string[]>(["shoplifting"]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -59,6 +67,15 @@ export default function CamerasPage() {
       setMessage(action === "test" ? (result.connected ? "Connection test received a frame." : "Connection test did not receive a frame.") : "Camera state updated.");
       await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "Camera action failed"); }
+  };
+
+  const saveModes = async (camera: CameraRow, modes: string[]) => {
+    if (!modes.length) { setError("Each camera must have at least one mode."); return; }
+    try {
+      await apiJson(`/cameras/${camera.id}/modes`, { method: "PUT", body: JSON.stringify({ modes }) });
+      setMessage(`Modes updated for ${camera.name}.`);
+      await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Mode update failed"); }
   };
 
   const refresh = async () => {
@@ -88,7 +105,7 @@ export default function CamerasPage() {
       const response = await fetch(`${apiBase}/cameras`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, rtsp_url: rtspUrl, username, password, enabled: true, group_id: groupId || null }),
+        body: JSON.stringify({ name, rtsp_url: rtspUrl, username, password, enabled: true, group_id: groupId || null, modes: newModes }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.detail || `Camera add failed (${response.status})`);
@@ -145,6 +162,13 @@ export default function CamerasPage() {
               <span className="block text-xs text-foreground/55 mb-1.5">Password</span>
               <input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </label>
+            <fieldset className="space-y-2">
+              <legend className="text-xs text-foreground/55 mb-2">Camera modes (choose one or more)</legend>
+              {modeOptions.map(mode => <label key={mode.id} className="flex gap-2 items-start text-sm">
+                <input type="checkbox" className="mt-1" checked={newModes.includes(mode.id)} onChange={e => setNewModes(e.target.checked ? [...newModes, mode.id] : newModes.filter(value => value !== mode.id))} />
+                <span><span className="font-medium">{mode.label}</span><span className="block text-xs text-foreground/45">{mode.detail}</span></span>
+              </label>)}
+            </fieldset>
             <button disabled={saving} className="btn btn-primary w-full" type="submit">{saving ? "Saving…" : "Save Camera"}</button>
           </form>
           <p className="mt-4 text-xs leading-5 text-foreground/45">
@@ -178,7 +202,15 @@ export default function CamerasPage() {
                       User: {camera.username || "none"} · Password: {camera.has_password ? "stored/encrypted" : "none"} · ROI points: {camera.roi_points?.length || 0}
                     </div></>}
                     <p className="text-xs mt-2">Last frame: {camera.last_frame_at ? new Date(camera.last_frame_at * 1000).toLocaleString() : "None"}</p>
+                    <div className="flex flex-wrap gap-1.5 mt-3">{camera.modes?.map(mode => <span className="badge text-brand" key={mode}>{mode.replaceAll("_", " ")}</span>)}</div>
                     {isAdmin && <><label className="block text-sm mt-3">Customer group for {camera.name}<select className="input" value={camera.group_id || ""} onChange={e => moveGroup(camera, e.target.value)}><option value="">Ungrouped</option>{groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
+                    <fieldset className="grid sm:grid-cols-2 gap-2 mt-3 p-3 rounded-lg bg-black/15 border border-glass-border">
+                      <legend className="text-sm px-1">Enabled analytics modes</legend>
+                      {modeOptions.map(mode => <label key={mode.id} className="flex gap-2 items-center text-sm">
+                        <input type="checkbox" checked={camera.modes?.includes(mode.id)} onChange={e => saveModes(camera, e.target.checked ? [...camera.modes, mode.id] : camera.modes.filter(value => value !== mode.id))} />
+                        {mode.label}
+                      </label>)}
+                    </fieldset>
                     <div className="flex flex-wrap gap-2 mt-3">
                       <button className="btn btn-secondary" onClick={() => cameraAction(camera, "enabled")}>{camera.enabled ? "Disable" : "Enable"}</button>
                       <button className="btn btn-secondary" onClick={() => cameraAction(camera, "test")}>Test connection</button>

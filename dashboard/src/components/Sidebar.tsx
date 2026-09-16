@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Camera, History, LayoutDashboard, Settings, ShieldCheck, GraduationCap, Users, Building2, KeyRound } from "lucide-react";
+import { Camera, History, LayoutDashboard, Settings, ShieldCheck, GraduationCap, Users, Building2, KeyRound, ScanSearch } from "lucide-react";
 
 import { useSession } from "./AuthGate";
 
@@ -10,6 +10,7 @@ const links = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/cameras", label: "Cameras", icon: Camera },
   { href: "/history", label: "Incidents", icon: History },
+  { href: "/analytics", label: "Analytics", icon: ScanSearch },
   { href: "/training", label: "Training", icon: GraduationCap, Users, Building2, KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/groups", label: "Customers", icon: Building2 },
