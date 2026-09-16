@@ -89,13 +89,18 @@ export default function ModeSettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (!cameraId) { setSettings(null); return; }
-    setError("");
-    setMessage("");
+    if (!cameraId) return;
     apiJson<ModeSettings>(`/cameras/${cameraId}/mode-settings`)
       .then(setSettings)
       .catch(err => setError(err instanceof Error ? err.message : "Unable to load mode settings"));
   }, [cameraId]);
+
+  const chooseCamera = (id: string) => {
+    setSettings(null);
+    setError("");
+    setMessage("");
+    setCameraId(id);
+  };
 
   const setSection = <K extends keyof ModeSettings>(section: K, key: keyof ModeSettings[K], value: number) => {
     setSettings(current => current ? {
@@ -129,7 +134,7 @@ export default function ModeSettingsPage() {
     <section className="glass-panel p-5 mb-5">
       <label className="block max-w-xl">
         <span className="block text-xs text-foreground/60 mb-1.5">Camera</span>
-        <select className="input" value={cameraId} onChange={event => setCameraId(event.target.value)}>
+        <select className="input" value={cameraId} onChange={event => chooseCamera(event.target.value)}>
           {!cameras.length && <option value="">No cameras configured</option>}
           {cameras.map(item => <option value={item.id} key={item.id}>{item.name}{item.group_name ? ` — ${item.group_name}` : ""}</option>)}
         </select>
@@ -172,7 +177,7 @@ export default function ModeSettingsPage() {
       </div>
 
       <div className="glass-panel p-4 mt-5 flex flex-wrap gap-3 items-center justify-between">
-        <p className="text-xs text-foreground/45 max-w-2xl">Changing these values resets the affected mode's short-lived scoring/cooldown state, but does not delete incidents, observations, camera assignments, or training data.</p>
+        <p className="text-xs text-foreground/45 max-w-2xl">Changing these values resets the affected mode state used for short-lived scoring and cooldowns, but does not delete incidents, observations, camera assignments, or training data.</p>
         <div className="flex gap-2">
           <button className="btn btn-secondary" type="button" onClick={() => setSettings(structuredClone(beta4Defaults))}>Restore beta.4 defaults</button>
           <button className="btn btn-primary" type="button" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save and apply"}</button>
