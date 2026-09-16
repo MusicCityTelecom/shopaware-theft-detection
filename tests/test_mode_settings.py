@@ -6,7 +6,13 @@ import pytest
 
 from shopaware.analytics import FaceCapture, PlateReader, VehicleBreakInDetector
 from shopaware.db import Database
-from shopaware.mode_runtime import configure_helpers, configured_process_camera, _persist_settings
+from shopaware.mode_runtime import (
+    _legacy_settings,
+    _persist_settings,
+    _snapshot_empty_settings,
+    configure_helpers,
+    configured_process_camera,
+)
 from shopaware.mode_settings import CameraModeSettingsInput, parse_mode_settings
 from shopaware.risk import RiskEngine
 
@@ -23,6 +29,28 @@ def test_beta4_defaults_are_preserved_and_complete():
     assert settings["vehicle_break_in"]["candidate_cooldown_seconds"] == 90.0
     assert settings["lpr"]["min_ocr_confidence"] == 0.20
     assert settings["face_capture"]["max_images_per_track"] == 5
+
+
+def test_migration_snapshots_effective_beta4_global_shoplifting_tuning(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHOPAWARE_RISK_THRESHOLD", "82")
+    db = Database(tmp_path / "legacy.db")
+    db.insert_camera(
+        camera_id="cam", name="Legacy", rtsp_url="rtsp://host/live", username="",
+        password_enc="", enabled=False,
+    )
+    core = SimpleNamespace(database=db, LOITERING_THRESHOLD=19.5)
+    effective = _legacy_settings(core)
+    assert effective["shoplifting"]["risk_threshold"] == 82
+    assert effective["shoplifting"]["loitering_seconds"] == 19.5
+    snapshotted = _snapshot_empty_settings(core, "cam")
+    assert snapshotted == effective
+    row = db.get_camera("cam")
+    assert row is not None
+    assert parse_mode_settings(row["mode_settings_json"]) == effective
+    # Later global changes must not retroactively alter this camera.
+    monkeypatch.setenv("SHOPAWARE_RISK_THRESHOLD", "40")
+    core.LOITERING_THRESHOLD = 4
+    assert parse_mode_settings(db.get_camera("cam")["mode_settings_json"]) == effective
 
 
 def test_mode_settings_reject_unknown_and_inverted_plate_lengths():
