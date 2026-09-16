@@ -2,11 +2,14 @@
 
 The legacy backend remains importable for development/tests while this module
 adds validated settings persistence and applies those settings to every camera
-before inference. The integration deliberately preserves beta.4 defaults.
+before inference. Existing cameras snapshot their effective beta.4 global
+Shoplifting values during first beta.5 startup so migration does not silently
+change a site that had tuned the prior global threshold.
 """
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Callable
 
 from fastapi import HTTPException
@@ -17,6 +20,34 @@ from shopaware.mode_settings import CameraModeSettingsInput, parse_mode_settings
 from shopaware.risk import RiskEngine
 
 
+def _legacy_settings(core: Any) -> dict[str, Any]:
+    """Effective beta.4 behavior, including prior global Shoplifting tuning."""
+    settings = parse_mode_settings(None)
+    try:
+        settings["shoplifting"]["risk_threshold"] = float(os.getenv("SHOPAWARE_RISK_THRESHOLD", "65"))
+    except ValueError:
+        settings["shoplifting"]["risk_threshold"] = 65.0
+    try:
+        settings["shoplifting"]["loitering_seconds"] = float(core.LOITERING_THRESHOLD)
+    except (TypeError, ValueError, AttributeError):
+        settings["shoplifting"]["loitering_seconds"] = 12.0
+    # Re-validate any environment-derived value before persisting it.
+    return parse_mode_settings(settings)
+
+
+def _settings_from_row(core: Any, row: Any) -> dict[str, Any]:
+    raw = row["mode_settings_json"]
+    try:
+        loaded = json.loads(raw or "{}") if isinstance(raw, str) else raw
+    except json.JSONDecodeError:
+        loaded = raw
+    # Schema 6 initializes existing/new rows to {}. Interpret that sentinel as
+    # the effective beta.4 configuration until it is snapshotted explicitly.
+    if loaded == {}:
+        return _legacy_settings(core)
+    return parse_mode_settings(raw)
+
+
 def _runtime_settings(core: Any, camera_id: str, camera: dict[str, Any]) -> dict[str, Any]:
     settings = camera.get("mode_settings")
     if settings is not None:
@@ -25,10 +56,10 @@ def _runtime_settings(core: Any, camera_id: str, camera: dict[str, Any]) -> dict
     if row is None:
         raise KeyError(camera_id)
     try:
-        settings = parse_mode_settings(row["mode_settings_json"])
+        settings = _settings_from_row(core, row)
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         core.logger.warning("Invalid mode settings for camera %s; beta.4 defaults restored: %s", camera_id, exc)
-        settings = parse_mode_settings(None)
+        settings = _legacy_settings(core)
     camera["mode_settings"] = settings
     return settings
 
@@ -168,6 +199,20 @@ def _persist_settings(core: Any, camera_id: str, settings: dict[str, Any]) -> No
         conn.close()
 
 
+def _snapshot_empty_settings(core: Any, camera_id: str) -> dict[str, Any]:
+    row = core.database.get_camera(camera_id)
+    if row is None:
+        raise KeyError(camera_id)
+    settings = _settings_from_row(core, row)
+    try:
+        loaded = json.loads(row["mode_settings_json"] or "{}")
+    except json.JSONDecodeError:
+        loaded = None
+    if loaded == {}:
+        _persist_settings(core, camera_id, settings)
+    return settings
+
+
 def install(core: Any) -> None:
     """Install per-camera mode settings onto the imported ShopAware backend."""
     if getattr(core, "_beta5_mode_settings_installed", False):
@@ -180,11 +225,29 @@ def install(core: Any) -> None:
 
     core.process_camera = process_camera
 
-    # Prime settings before the FastAPI lifespan starts the inference loop.
+    # Snapshot every migrated camera's effective beta.4 settings once so later
+    # global configuration edits cannot retroactively alter its per-camera values.
     with core.camera_manager.lock:
         for camera_id, camera in core.camera_manager.cameras.items():
-            settings = _runtime_settings(core, camera_id, camera)
+            settings = _snapshot_empty_settings(core, camera_id)
+            camera["mode_settings"] = settings
             configure_helpers(camera, settings, force=True)
+
+    # Cameras created after startup must also get a complete persisted settings
+    # object instead of depending indefinitely on the schema's {} sentinel.
+    original_add_camera = core.camera_manager.add_camera
+
+    def add_camera(camera_input: Any) -> str:
+        camera_id = original_add_camera(camera_input)
+        settings = _snapshot_empty_settings(core, camera_id)
+        with core.camera_manager.lock:
+            runtime = core.camera_manager.cameras.get(camera_id)
+            if runtime is not None:
+                runtime["mode_settings"] = settings
+                configure_helpers(runtime, settings, force=True)
+        return camera_id
+
+    core.camera_manager.add_camera = add_camera
 
     @core.app.get("/cameras/{camera_id}/mode-settings")
     def get_camera_mode_settings(camera_id: str):
@@ -192,7 +255,7 @@ def install(core: Any) -> None:
         if row is None:
             raise HTTPException(404, "Camera not found")
         try:
-            return parse_mode_settings(row["mode_settings_json"])
+            return _settings_from_row(core, row)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise HTTPException(500, "Camera mode settings are invalid") from exc
 
