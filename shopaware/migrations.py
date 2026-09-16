@@ -47,6 +47,9 @@ MIGRATIONS = {
         "CREATE INDEX idx_observations_mode_time ON observations(mode, observed_at DESC)",
         "CREATE INDEX idx_observations_subject ON observations(subject_key, observed_at DESC)",
     ],
+    6: [
+        "ALTER TABLE cameras ADD COLUMN mode_settings_json TEXT NOT NULL DEFAULT '{}'",
+    ],
 }
 
 
