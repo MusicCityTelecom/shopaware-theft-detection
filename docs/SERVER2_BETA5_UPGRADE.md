@@ -1,6 +1,6 @@
 # Upgrade the installed Server2 app to v0.1.0-beta.5
 
-This procedure upgrades an existing `shopaware.innawareucp.com` beta.4 installation to beta.5. It preserves `.env`, users, customer groups, camera grants, encrypted camera credentials, incidents, observations, media, training data, enabled camera modes and TLS configuration. Startup performs an additive schema-6 migration that adds persisted per-camera mode settings. Existing cameras receive beta.4-equivalent defaults, so their behavior does not change until an administrator explicitly changes the new settings.
+This procedure upgrades an existing `shopaware.innawareucp.com` beta.4 installation to beta.5. It preserves `.env`, users, customer groups, camera grants, encrypted camera credentials, incidents, observations, media, training data, enabled camera modes and TLS configuration. Startup performs an additive schema-6 migration that adds persisted per-camera mode settings. Existing cameras snapshot their effective beta.4 Shoplifting tuning (including a previously customized global risk or loitering threshold) and use beta.4 defaults for the newly exposed mode-specific controls, so the upgrade does not intentionally change their behavior.
 
 ## 1. Connect, inspect and back up
 
@@ -29,7 +29,7 @@ COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f deploy/server2/docker
 docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d --wait --wait-timeout 300
 ```
 
-The persistent database, encryption key, evidence, models, training data and run directories are reused. The first backend startup migrates SQLite from schema 5 to schema 6 by adding `cameras.mode_settings_json` with a default empty object. The application expands that empty object to the exact beta.4 mode defaults.
+The persistent database, encryption key, evidence, models, training data and run directories are reused. The first backend startup migrates SQLite from schema 5 to schema 6 by adding `cameras.mode_settings_json`. Beta.5 then snapshots each migrated camera's effective beta.4 Shoplifting risk/loitering values into its complete per-camera settings object. Newly exposed Vehicle break-in, LPR and Face Capture controls begin with their beta.4 behavior-equivalent values.
 
 ## 3. Verify before changing any tuning
 
@@ -52,7 +52,7 @@ Then sign in through `https://shopaware.innawareucp.com` and confirm:
 2. Existing camera assignments and enabled modes are unchanged.
 3. Existing incidents and Analytics observations are accessible to the same authorized accounts.
 4. **Mode Settings** appears for administrators only.
-5. Selecting an existing camera shows the beta.4-equivalent defaults before any manual change.
+5. Selecting an existing camera shows its preserved effective beta.4 Shoplifting tuning plus beta.4-equivalent defaults for the other mode controls.
 6. A regular user cannot access the Mode Settings page or API.
 
 ## 4. Tune one camera at a time
@@ -61,7 +61,7 @@ Open **Mode Settings**, choose a camera and change only the parameters needed fo
 
 Recommended initial approach on CPU-only Server2:
 
-- Keep Shoplifting defaults until representative store footage is reviewed.
+- Keep Shoplifting settings unchanged until representative store footage is reviewed.
 - For Vehicle break-in, create a Parking zone and Ignore zones first; then tune dwell/interactions based on staged owner/valet/maintenance activity.
 - For LPR, raise minimum OCR confidence if low-quality guesses are being stored; validate every plate against original video.
 - For Face Capture, raise minimum quality if crops are too blurry and keep the per-track image cap small.
