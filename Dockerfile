@@ -16,7 +16,7 @@ ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install torch torchvision --index-url ${TORCH_INDEX_URL} && pip install -r requirements.txt
 
-COPY backend.py VERSION ./
+COPY backend.py beta5_backend.py VERSION ./
 COPY shopaware ./shopaware
 COPY tools ./tools
 RUN mkdir -p /app/alerts /app/incidents /app/models /app/data
@@ -32,4 +32,4 @@ ENV YOLO_CONFIG_DIR=/app/data/ultralytics
 HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=4)"
 
 EXPOSE 8000
-CMD ["uvicorn", "backend:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "beta5_backend:app", "--host", "0.0.0.0", "--port", "8000"]
