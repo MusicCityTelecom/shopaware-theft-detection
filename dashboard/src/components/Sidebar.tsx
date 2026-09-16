@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Camera, History, LayoutDashboard, Settings, ShieldCheck, GraduationCap, Users, Building2, KeyRound, ScanSearch } from "lucide-react";
+import { Camera, History, LayoutDashboard, Settings, ShieldCheck, GraduationCap, Users, Building2, KeyRound, ScanSearch, SlidersHorizontal } from "lucide-react";
 
 import { useSession } from "./AuthGate";
 
@@ -11,7 +11,8 @@ const links = [
   { href: "/cameras", label: "Cameras", icon: Camera },
   { href: "/history", label: "Incidents", icon: History },
   { href: "/analytics", label: "Analytics", icon: ScanSearch },
-  { href: "/training", label: "Training", icon: GraduationCap, Users, Building2, KeyRound },
+  { href: "/mode-settings", label: "Mode Settings", icon: SlidersHorizontal },
+  { href: "/training", label: "Training", icon: GraduationCap },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/groups", label: "Customers", icon: Building2 },
   { href: "/users", label: "Users", icon: Users },
@@ -35,7 +36,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-2 max-[900px]:flex max-[900px]:gap-2 max-[900px]:space-y-0 max-[900px]:overflow-x-auto">
-        {links.filter(link => isAdmin || !["/training", "/settings", "/users", "/groups"].includes(link.href)).map((link) => {
+        {links.filter(link => isAdmin || !["/training", "/settings", "/users", "/groups", "/mode-settings"].includes(link.href)).map((link) => {
           const Icon = link.icon;
           const active = pathname === link.href;
           return (
