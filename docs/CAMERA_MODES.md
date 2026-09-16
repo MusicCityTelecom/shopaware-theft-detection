@@ -15,7 +15,7 @@ An administrator can enable any combination of four modes on each camera under *
 2. Select one or more checkboxes under **Enabled analytics modes**. At least one mode is required.
 3. For Shoplifting, draw merchandise, checkout, exit, restricted and ignore zones.
 4. For Vehicle break-in, draw a **Parking** zone around the relevant parking area. If no Parking zone exists, all detected vehicles in the frame are considered. Draw **Ignore** zones over public roads, windows, neighboring property, or irrelevant areas.
-5. Open **Mode Settings** to tune the enabled modes for that exact camera. Existing cameras initially use the beta.4-equivalent defaults listed below.
+5. Open **Mode Settings** to tune the enabled modes for that exact camera. Existing cameras initially use the beta.4-equivalent defaults listed below, while any previously customized beta.4 global Shoplifting risk/loitering values are preserved during migration.
 6. Use **Analytics** for LPR and Face Capture observations. Use **Incidents** for Shoplifting and Vehicle break-in candidates.
 7. Stage consented daytime/nighttime tests, then verify snapshots, clips, plate text, camera grouping, false positives, CPU use and event latency.
 
@@ -23,7 +23,7 @@ Multiple modes share a camera's decoded frames and YOLO inference, but LPR and F
 
 ## Per-camera mode settings
 
-Beta.5 persists a complete settings object independently for every camera. Saving settings applies them without a service restart. They are reloaded after process/container restart and re-applied when a camera stream reconnects or starts a new stream generation.
+Beta.6 persists a complete settings object independently for every camera. Saving settings applies them without a service restart. They are reloaded after process/container restart and re-applied when a camera stream reconnects or starts a new stream generation.
 
 The default values preserve beta.4 behavior:
 
@@ -51,7 +51,7 @@ These values are tuning controls, not calibrated probabilities. Lowering thresho
 
 Vehicle detection for LPR and Vehicle break-in uses the standard COCO classes in `yolo26n.pt`. Keep `SHOPAWARE_ENABLE_SPECIALIZED_MODEL=false` when using those modes. A globally activated specialized Shoplifting detector may not contain vehicle classes, so ShopAware deliberately does not manufacture vehicle results from it.
 
-The included LPR path is a conservative CPU baseline, not a production ALPR guarantee. It may miss plates that are small, blurred, angled, overexposed, obscured, or outside its locator's geometry. Do not use OCR text as the sole basis for enforcement. Make/model inference is not implemented in beta.5; showing “not classified” is intentional.
+The included LPR path is a conservative CPU baseline, not a production ALPR guarantee. It may miss plates that are small, blurred, angled, overexposed, obscured, or outside its locator's geometry. Do not use OCR text as the sole basis for enforcement. Make/model inference is not implemented in beta.6; showing “not classified” is intentional.
 
 ## Face privacy and retention
 
