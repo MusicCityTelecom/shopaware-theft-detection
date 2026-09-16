@@ -6,7 +6,7 @@ person and they do not treat an OCR result or behavior score as a verified fact.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -78,14 +78,26 @@ class PlateObservation:
 class PlateReader:
     """Conservative CPU plate locator/OCR. Empty results are preferred to guesses."""
 
-    def __init__(self, cooldown_seconds: float = 60.0) -> None:
+    def __init__(
+        self,
+        cooldown_seconds: float = 60.0,
+        min_ocr_confidence: float = 0.20,
+        min_plate_chars: int = 4,
+        max_plate_chars: int = 10,
+    ) -> None:
+        if cooldown_seconds < 0 or not 0 <= min_ocr_confidence <= 1:
+            raise ValueError("Invalid LPR settings")
+        if not 1 <= min_plate_chars <= max_plate_chars <= 16:
+            raise ValueError("Invalid LPR plate length settings")
         cascade = Path(cv2.data.haarcascades) / "haarcascade_russian_plate_number.xml"
         self.locator = cv2.CascadeClassifier(str(cascade))
         self.cooldown_seconds = cooldown_seconds
+        self.min_ocr_confidence = min_ocr_confidence
+        self.min_plate_chars = min_plate_chars
+        self.max_plate_chars = max_plate_chars
         self.last_seen: dict[str, float] = {}
 
-    @staticmethod
-    def _ocr(crop: np.ndarray) -> tuple[str, float]:
+    def _ocr(self, crop: np.ndarray) -> tuple[str, float]:
         try:
             import pytesseract
             from pytesseract import Output
@@ -103,11 +115,11 @@ class PlateReader:
         for text, confidence in zip(data.get("text", []), data.get("conf", [])):
             value = re.sub(r"[^A-Z0-9]", "", str(text).upper())
             try:
-                score = float(confidence)
+                score = float(confidence) / 100.0
             except (TypeError, ValueError):
-                score = -1
-            if 4 <= len(value) <= 10 and score >= 20:
-                candidates.append((value, score / 100.0))
+                score = -1.0
+            if self.min_plate_chars <= len(value) <= self.max_plate_chars and score >= self.min_ocr_confidence:
+                candidates.append((value, score))
         return max(candidates, key=lambda item: item[1], default=("", 0.0))
 
     def observe(self, frame: np.ndarray, vehicle_boxes: list[np.ndarray], now: float) -> list[PlateObservation]:
@@ -146,11 +158,14 @@ class FaceObservation:
 class FaceCapture:
     """Face capture grouped only by continuous pose track; no biometric identity matching."""
 
-    def __init__(self, cooldown_seconds: float = 8.0, max_per_track: int = 5) -> None:
+    def __init__(self, cooldown_seconds: float = 8.0, max_per_track: int = 5, min_quality: float = 0.0) -> None:
+        if cooldown_seconds < 0 or max_per_track < 1 or not 0 <= min_quality <= 1:
+            raise ValueError("Invalid face capture settings")
         cascade = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
         self.detector = cv2.CascadeClassifier(str(cascade))
         self.cooldown_seconds = cooldown_seconds
         self.max_per_track = max_per_track
+        self.min_quality = min_quality
         self.state: dict[str, tuple[float, int, float]] = {}
 
     def observe(self, frame: np.ndarray, people: list[tuple[int, np.ndarray]], generation: int,
@@ -171,11 +186,13 @@ class FaceCapture:
             crop = upper[fy:fy + fh, fx:fx + fw]
             blur = float(cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
             quality = min(1.0, (fw * fh) / 18000.0) * min(1.0, blur / 180.0)
+            if quality < self.min_quality:
+                continue
             subject = f"track-{generation}-{track_id}"
             last, count, best = self.state.get(subject, (-1e9, 0, 0.0))
             if count >= self.max_per_track or now - last < self.cooldown_seconds:
                 continue
-            if count and quality < max(0.20, best * 0.70):
+            if count and quality < max(self.min_quality, 0.20, best * 0.70):
                 continue
             self.state[subject] = (now, count + 1, max(best, quality))
             found.append(FaceObservation(subject, min(0.99, 0.5 + quality / 2), crop.copy(), quality))
@@ -202,11 +219,26 @@ class InteractionTrack:
 class VehicleBreakInDetector:
     """Explainable person/vehicle interaction candidates; never proof of a crime."""
 
-    def __init__(self, quiet_seconds: float = 90.0) -> None:
+    def __init__(
+        self,
+        quiet_seconds: float = 90.0,
+        risk_threshold: float = 65.0,
+        dwell_seconds: float = 12.0,
+        required_access_interactions: int = 3,
+        access_interval_seconds: float = 1.5,
+    ) -> None:
+        if quiet_seconds <= 0 or not 0 < risk_threshold <= 100 or dwell_seconds <= 0:
+            raise ValueError("Invalid vehicle break-in settings")
+        if required_access_interactions < 1 or access_interval_seconds <= 0:
+            raise ValueError("Invalid vehicle break-in interaction settings")
         self.vehicles: dict[int, VehicleTrack] = {}
         self.interactions: dict[tuple[int, int], InteractionTrack] = {}
         self.next_vehicle_id = 1
         self.quiet_seconds = quiet_seconds
+        self.risk_threshold = risk_threshold
+        self.dwell_seconds = dwell_seconds
+        self.required_access_interactions = required_access_interactions
+        self.access_interval_seconds = access_interval_seconds
 
     def _update_vehicles(self, boxes: list[np.ndarray], now: float) -> dict[int, VehicleTrack]:
         unmatched = set(self.vehicles)
@@ -246,22 +278,22 @@ class VehicleBreakInDetector:
                     if wrist[0] > 0 and wrist[1] > 0 and x1 - 12 <= wrist[0] <= x2 + 12 and y1 - 12 <= wrist[1] <= y2 + 12:
                         wrist_near = True
                 # Count separated access interactions, not every processed frame.
-                if wrist_near and now - state.last_reach >= 1.5:
+                if wrist_near and now - state.last_reach >= self.access_interval_seconds:
                     state.reach_count += 1
                     state.last_reach = now
                 dwell = now - state.first_near
                 signals = ["person_near_vehicle"]
                 score = 20
-                if dwell >= 12:
+                if dwell >= self.dwell_seconds:
                     signals.append("vehicle_loitering")
                     score += 20
-                if state.reach_count >= 3:
+                if state.reach_count >= self.required_access_interactions:
                     signals.append("repeated_vehicle_access")
                     score += 30
                 if wrist_near:
                     signals.append("hand_near_vehicle_entry")
                     score += 20
-                if score >= 65 and now - state.last_candidate >= self.quiet_seconds:
+                if score >= self.risk_threshold and now - state.last_candidate >= self.quiet_seconds:
                     state.last_candidate = now
                     candidates.append({
                         "event_type": "vehicle_break_in_candidate",
