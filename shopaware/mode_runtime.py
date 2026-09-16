@@ -233,21 +233,21 @@ def install(core: Any) -> None:
             camera["mode_settings"] = settings
             configure_helpers(camera, settings, force=True)
 
-    # Cameras created after startup must also get a complete persisted settings
-    # object instead of depending indefinitely on the schema's {} sentinel.
-    original_add_camera = core.camera_manager.add_camera
+    # Patch the class rather than only the startup instance so disposable/test
+    # managers and any future manager replacement preserve the same invariant.
+    original_add_camera = core.CameraManager.add_camera
 
-    def add_camera(camera_input: Any) -> str:
-        camera_id = original_add_camera(camera_input)
+    def add_camera(manager: Any, camera_input: Any) -> str:
+        camera_id = original_add_camera(manager, camera_input)
         settings = _snapshot_empty_settings(core, camera_id)
-        with core.camera_manager.lock:
-            runtime = core.camera_manager.cameras.get(camera_id)
+        with manager.lock:
+            runtime = manager.cameras.get(camera_id)
             if runtime is not None:
                 runtime["mode_settings"] = settings
                 configure_helpers(runtime, settings, force=True)
         return camera_id
 
-    core.camera_manager.add_camera = add_camera
+    core.CameraManager.add_camera = add_camera
 
     @core.app.get("/cameras/{camera_id}/mode-settings")
     def get_camera_mode_settings(camera_id: str):
