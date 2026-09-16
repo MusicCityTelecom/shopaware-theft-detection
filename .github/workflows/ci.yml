@@ -45,6 +45,7 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
 
   release-containers:
+    needs: [backend-tests, dashboard]
     if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -63,25 +64,28 @@ jobs:
       - name: Verify packaged runtime, actual CPU models and H.264 evidence
         run: |
           docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -m tools.check_runtime
+          docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -c "import sqlite3; assert sqlite3.connect('/app/data/shopaware.db').execute('PRAGMA user_version').fetchone()[0] == 6"
           curl --fail --max-time 30 http://127.0.0.1:18082/health/live
           curl --fail --max-time 30 http://127.0.0.1:18081/api/health/live
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/api/settings)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/api/cameras/not-a-camera/mode-settings)" = 401
       - name: Verify container recreation preserves state
         run: |
           sudo sha256sum /var/lib/shopaware/data/.shopaware.key > /tmp/shopaware-key.sha256
           docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d --force-recreate --wait --wait-timeout 300
           sudo sha256sum --check /tmp/shopaware-key.sha256
           docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -m tools.check_runtime
+          docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -c "import sqlite3; assert sqlite3.connect('/app/data/shopaware.db').execute('PRAGMA user_version').fetchone()[0] == 6"
       - name: Publish validated prerelease
-        if: github.ref == 'refs/heads/release/v0.1.0-beta.4' || github.head_ref == 'release/v0.1.0-beta.4'
+        if: github.ref == 'refs/heads/release/v0.1.0-beta.5' || github.head_ref == 'release/v0.1.0-beta.5'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          gh release view v0.1.0-beta.4 >/dev/null 2>&1 || gh release create v0.1.0-beta.4 \
+          gh release view v0.1.0-beta.5 >/dev/null 2>&1 || gh release create v0.1.0-beta.5 \
             --target "$RELEASE_SHA" \
-            --title "ShopAware v0.1.0-beta.4" \
-            --notes-file docs/releases/v0.1.0-beta.4.md \
+            --title "ShopAware v0.1.0-beta.5" \
+            --notes-file docs/releases/v0.1.0-beta.5.md \
             --prerelease
       - name: Logs
         if: always()
