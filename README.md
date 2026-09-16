@@ -176,3 +176,56 @@ Ultralytics software/models have separate licensing terms. Do not assume the ups
 ### Bootstrap
 - [x] repository initialized
 - [x] upstream baseline reviewed/pinned
+- [x] YOLO26 selected for new default detector/pose paths
+- [x] configurable model paths
+- [x] encrypted RTSP password storage
+- [x] reconnecting multi-camera backend baseline
+- [x] snapshot incidents + review states
+- [x] SMTP alert plumbing
+- [x] Docker bootstrap
+- [x] unit-test/CI bootstrap
+- [x] adapt Next.js dashboard
+- [ ] live YOLO26 regression qualification
+- [x] isolate per-camera tracker state in code and synthetic regression tests
+- [ ] real two-camera qualification (#3)
+
+### Incident evidence
+- [x] rolling pre-event buffer
+- [x] post-event continuation
+- [x] prototype MP4 incident clips
+- [x] dashboard clip playback
+- [x] FFmpeg H.264 browser evidence encoder
+- [x] retention/disk quota
+- [x] authenticated evidence routes
+
+### Detection quality
+- [x] merchandise / restricted / checkout / exit zone types
+- [x] scored multi-signal incidents
+- [x] candidate deduplication
+- [x] per-camera mode thresholds and cooldown settings
+- [ ] YOLO26n/s/m benchmarking
+- [x] camera-selected capture, annotation and dataset export workflow
+- [ ] ShopAware-specific trained model
+- [x] multiple independently selectable analytics modes per camera
+- [x] baseline CPU plate OCR and anonymous per-track face capture
+- [x] explainable vehicle-interaction review candidates
+- [ ] qualified plate detector/OCR benchmark for target camera angles and jurisdictions
+- [ ] qualified vehicle make/model classifier
+- [ ] real parking-lot break-in validation dataset and calibrated thresholds
+
+### Production hardening
+- [x] local admin authentication
+- [x] administrator/user roles, customer groups and camera access assignments
+- [ ] audit trail
+- [ ] production reverse proxy/TLS
+- [x] documented GPU Docker override (unexecuted here)
+- [ ] SMS alert provider
+- [x] Server2 backup script and restore instructions
+
+## Safety / operational note
+
+ShopAware is a security decision-support system. Computer-vision detections, OCR text, color estimates, and behavior scores are probabilistic and can be wrong. A trained human should review evidence before taking action. Follow applicable notice, privacy, biometric, retention, and employment laws.
+
+### Users and customer access
+
+Open **My account** to change your password. Administrators can create **Customers**, assign cameras to them in **Cameras**, and manage accounts and camera/group permissions in **Users**. See [the complete user and customer guide](docs/USERS_AND_CUSTOMERS.md).
