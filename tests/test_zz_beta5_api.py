@@ -1,5 +1,7 @@
 import importlib
 
+import pytest
+import numpy as np
 from fastapi.testclient import TestClient
 
 from shopaware.mode_settings import parse_mode_settings
@@ -87,3 +89,84 @@ def test_beta5_admin_mode_settings_validation_rejects_invalid_values(api):
     row = backend.database.get_camera(camera["id"])
     assert row is not None
     assert parse_mode_settings(row["mode_settings_json"]) == before
+
+
+@pytest.mark.parametrize("mode,field,value,changed_helper", [
+    ("shoplifting", "risk_threshold", 78, "risk"),
+    ("vehicle_break_in", "dwell_seconds", 24, "break_in"),
+    ("lpr", "min_ocr_confidence", .64, "plate_reader"),
+    ("face_capture", "min_quality", .25, "face_capture"),
+    (None, None, None, None),
+])
+def test_saving_mode_preserves_other_modes_live_state(api, mode, field, value, changed_helper):
+    admin, backend = api
+    importlib.import_module("beta5_backend")
+    response = admin.post("/cameras", json={
+        "name": "Independent tuning", "rtsp_url": "rtsp://synthetic.invalid/live",
+        "enabled": False, "modes": ["shoplifting", "vehicle_break_in", "lpr", "face_capture"],
+    })
+    assert response.status_code == 201
+    camera_id = response.json()["camera"]["id"]
+    runtime = backend.camera_manager.cameras[camera_id]
+    helpers = {name: runtime[name] for name in ("risk", "break_in", "plate_reader", "face_capture")}
+    runtime["plate_reader"].last_seen["ABC123"] = 100.0
+    runtime["face_capture"].state["1:42"] = (100.0, 5, .8)
+    settings = admin.get(f"/cameras/{camera_id}/mode-settings").json()
+    if mode is not None:
+        settings[mode][field] = value
+    saved = admin.put(f"/cameras/{camera_id}/mode-settings", json=settings)
+    assert saved.status_code == 200
+    assert saved.json()["settings"] == settings
+    for name, helper in helpers.items():
+        if name != changed_helper:
+            assert runtime[name] is helper
+        else:
+            assert runtime[name] is not helper
+    if changed_helper != "plate_reader":
+        assert runtime["plate_reader"].last_seen["ABC123"] == 100.0
+    if changed_helper != "face_capture":
+        assert runtime["face_capture"].state["1:42"] == (100.0, 5, .8)
+    assert parse_mode_settings(backend.database.get_camera(camera_id)["mode_settings_json"]) == settings
+
+
+def test_reconnect_between_snapshots_uses_saved_tuning_on_first_frame(api, monkeypatch):
+    admin, backend = api
+    importlib.import_module("beta5_backend")
+    camera_id = admin.post("/cameras", json={
+        "name": "Reconnect race", "rtsp_url": "rtsp://synthetic.invalid/live", "enabled": False,
+    }).json()["camera"]["id"]
+    settings = parse_mode_settings({
+        "shoplifting": {"risk_threshold": 81},
+        "lpr": {"min_ocr_confidence": .71},
+        "face_capture": {"max_images_per_track": 2},
+        "vehicle_break_in": {"dwell_seconds": 29},
+    })
+    assert admin.put(f"/cameras/{camera_id}/mode-settings", json=settings).status_code == 200
+    camera = backend.camera_manager.cameras[camera_id]
+    frame = np.zeros((64, 96, 3), dtype=np.uint8)
+    generations = iter([10, 11])
+
+    class Capture:
+        def snapshot(self):
+            return True, frame, 1, next(generations), 100.0
+
+        def release(self):
+            pass
+
+    class StopBeforeInference(Exception):
+        pass
+
+    class Pose:
+        def predict(self, *args, **kwargs):
+            assert camera["tracking"].generation == 11
+            assert camera["risk"].threshold == 81
+            assert camera["plate_reader"].min_ocr_confidence == .71
+            assert camera["face_capture"].max_per_track == 2
+            assert camera["break_in"].dwell_seconds == 29
+            raise StopBeforeInference
+
+    monkeypatch.setitem(camera, "cap", Capture())
+    monkeypatch.setattr(backend, "model_pose", Pose())
+    monkeypatch.setattr(backend, "model_obj", object())
+    with camera["tracking"].lock, pytest.raises(StopBeforeInference):
+        backend.process_camera(camera_id, camera, 100.0, True, frame)

@@ -1,10 +1,8 @@
-# Upgrade the installed Server2 app to v0.1.0-beta.6
+# Upgrade the installed Server2 app to v0.1.0-beta.7
 
-> SUPERSEDED — do not install this tag. It predates the final corrections. Use the beta.7 candidate only after its exact-commit release gate passes; see [beta.7 upgrade guide](SERVER2_BETA7_UPGRADE.md). The original notes below are historical.
+This procedure upgrades an existing `shopaware.innawareucp.com` beta.4 installation to the corrected beta.7 release. **Do not deploy the earlier beta.5 or beta.6 tags**; both were published before the final corrections. Beta.7 is the successor candidate, and must pass the exact-commit gate before installation.
 
-This procedure upgrades an existing `shopaware.innawareucp.com` beta.4 installation to the corrected beta.6 release. **Do not deploy the earlier `v0.1.0-beta.5` prerelease tag**; it was published from an earlier branch state and is superseded by beta.6.
-
-Beta.6 preserves `.env`, users, customer groups, camera grants, encrypted camera credentials, incidents, observations, media, training data, enabled camera modes and TLS configuration. Startup performs an additive schema-6 migration that adds persisted per-camera mode settings. Existing cameras snapshot their effective beta.4 Shoplifting tuning (including a previously customized global risk or loitering threshold) and use beta.4 behavior-equivalent values for the newly exposed mode controls.
+Beta.7 preserves `.env`, users, customer groups, camera grants, encrypted camera credentials, incidents, observations, media, training data, enabled camera modes and TLS configuration. Startup performs an additive schema-6 migration that adds persisted per-camera mode settings. Existing cameras snapshot their effective beta.4 Shoplifting tuning (including a previously customized global risk or loitering threshold) and use beta.4 behavior-equivalent values for the newly exposed mode controls.
 
 ## 1. Connect, inspect and back up
 
@@ -21,19 +19,21 @@ Record the old commit and newest successful backup directory. Stop if Git shows 
 
 ## 2. Select the validated release and rebuild
 
-Only continue after GitHub shows `v0.1.0-beta.6` as a prerelease and the release workflow for its exact target SHA is green.
+Only continue after GitHub shows `v0.1.0-beta.7` as a prerelease and the release workflow for its exact target SHA is green.
 
 ```bash
 cd /opt/shopaware
 git fetch origin --tags
-git tag --list v0.1.0-beta.6
-git switch --detach v0.1.0-beta.6
-test "$(cat VERSION)" = "0.1.0-beta.6"
+# Set this to the full 40-character SHA from the successful beta.7 push CI run.
+QUALIFIED_SHA=REPLACE_WITH_VERIFIED_CI_SHA
+test "$(git rev-parse 'v0.1.0-beta.7^{commit}')" = "$QUALIFIED_SHA"
+git switch --detach v0.1.0-beta.7
+test "$(cat VERSION)" = "0.1.0-beta.7"
 COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f deploy/server2/docker-compose.yml build --pull
 docker compose --env-file .env -f deploy/server2/docker-compose.yml up -d --wait --wait-timeout 300
 ```
 
-The persistent database, encryption key, evidence, models, training data and run directories are reused. The first backend startup migrates SQLite from schema 5 to schema 6 by adding `cameras.mode_settings_json`. Beta.6 then snapshots each migrated camera's effective beta.4 Shoplifting risk/loitering values into its complete per-camera settings object. Vehicle break-in, LPR and Face Capture settings begin with beta.4 behavior-equivalent values.
+The persistent database, encryption key, evidence, models, training data and run directories are reused. The first backend startup migrates SQLite from schema 5 to schema 6 by adding `cameras.mode_settings_json`. Beta.7 then snapshots each migrated camera's effective beta.4 Shoplifting risk/loitering values into its complete per-camera settings object. Vehicle break-in, LPR and Face Capture settings begin with beta.4 behavior-equivalent values.
 
 ## 3. Verify before changing any tuning
 
@@ -48,7 +48,7 @@ docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shop
 docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -c "import sqlite3; print(sqlite3.connect('/app/data/shopaware.db').execute('PRAGMA user_version').fetchone()[0])"
 ```
 
-The runtime check must report version `0.1.0-beta.6`, H.264 and passed CPU inference. The final command must print `6`.
+The runtime check must report version `0.1.0-beta.7`, H.264 and passed CPU inference. The final command must print `6`.
 
 Then sign in through `https://shopaware.innawareucp.com` and confirm:
 
@@ -91,8 +91,8 @@ Sign back in and confirm the camera retains the saved value. Also confirm the st
 
 ## Roll back
 
-Beta.6 schema 6 is newer than beta.4 schema 5. A code-only rollback is not valid.
+Beta.7 schema 6 is newer than beta.4 schema 5. A code-only rollback is not valid.
 
-Before rollback, take a rescue backup of the current beta.6 state if any new incidents/settings must be retained. Then stop the services, restore the complete pre-upgrade beta.4 backup (database and matching encryption key at minimum, plus media if needed), select the recorded beta.4 tag/commit, rebuild, start and verify using the restore procedure in `docs/SERVER2_DEPLOYMENT.md`.
+Before rollback, take a rescue backup of the current beta.7 state if any new incidents/settings must be retained. Then stop the services, restore the complete pre-upgrade beta.4 backup (database and matching encryption key at minimum, plus media if needed), select the recorded beta.4 tag/commit, rebuild, start and verify using the restore procedure in `docs/SERVER2_DEPLOYMENT.md`.
 
 Do not attempt to downgrade the schema in place by manually dropping `mode_settings_json`.

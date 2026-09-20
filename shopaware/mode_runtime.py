@@ -276,7 +276,8 @@ def install(core: Any) -> None:
             context = camera["tracking"]
             with context.lock:
                 camera["mode_settings"] = settings
-                configure_helpers(camera, settings, force=True)
+                # Preserve cooldowns and track caps for unchanged modes.
+                configure_helpers(camera, settings)
         return {"settings": settings, "restart_required": False}
 
     core._beta5_mode_settings_installed = True

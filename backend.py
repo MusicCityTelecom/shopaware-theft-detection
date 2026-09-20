@@ -526,10 +526,16 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
             cam["roi_entry_times"].clear()
             cam["last_objects"] = []
             cam["last_detections"] = []
-            cam["risk"] = RiskEngine(threshold=float(os.getenv("SHOPAWARE_RISK_THRESHOLD", "65")))
-            cam["plate_reader"] = PlateReader()
-            cam["face_capture"] = FaceCapture()
-            cam["break_in"] = VehicleBreakInDetector()
+            if cam.get("mode_settings") is not None:
+                # The stream can reconnect after the mode wrapper's snapshot.
+                # Apply saved tuning to this frame too, before inference/events.
+                from shopaware.mode_runtime import configure_helpers
+                configure_helpers(cam, cam["mode_settings"], force=True)
+            else:
+                cam["risk"] = RiskEngine(threshold=float(os.getenv("SHOPAWARE_RISK_THRESHOLD", "65")))
+                cam["plate_reader"] = PlateReader()
+                cam["face_capture"] = FaceCapture()
+                cam["break_in"] = VehicleBreakInDetector()
         # Preserve original evidence before annotations are drawn.
         # Evidence is sampled by capture before inference/annotations.
         now = captured_at

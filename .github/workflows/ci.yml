@@ -56,8 +56,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Prove checkout matches release SHA
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate release version, branch, SHA and image metadata
+        run: python -m tools.release
       - name: Prepare isolated release state
         run: |
           cp deploy/server2/.env.production.example .env
@@ -82,27 +85,9 @@ jobs:
           docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -m tools.check_runtime
           docker compose --env-file .env -f deploy/server2/docker-compose.yml exec -T shopaware python -c "import sqlite3; assert sqlite3.connect('/app/data/shopaware.db').execute('PRAGMA user_version').fetchone()[0] == 6"
       - name: Publish validated prerelease
-        if: github.ref == 'refs/heads/release/v0.1.0-beta.6'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ github.sha }}
-          RELEASE_TAG: v0.1.0-beta.6
-        run: |
-          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            EXISTING_TARGET="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq .targetCommitish)"
-            if [ "$EXISTING_TARGET" != "$RELEASE_SHA" ]; then
-              echo "Refusing to reuse $RELEASE_TAG: existing target $EXISTING_TARGET != validated SHA $RELEASE_SHA" >&2
-              exit 1
-            fi
-            echo "$RELEASE_TAG already points at the validated SHA."
-          else
-            gh release create "$RELEASE_TAG" \
-              --target "$RELEASE_SHA" \
-              --title "ShopAware v0.1.0-beta.6" \
-              --notes-file docs/releases/v0.1.0-beta.6.md \
-              --prerelease
-          fi
+        run: python -m tools.release --publish
       - name: Logs
         if: always()
         run: docker compose --env-file .env -f deploy/server2/docker-compose.yml logs --tail=100

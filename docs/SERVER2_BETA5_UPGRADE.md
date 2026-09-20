@@ -1,5 +1,7 @@
 # Upgrade the installed Server2 app to v0.1.0-beta.5
 
+> SUPERSEDED — do not install this tag. It predates the final corrections. Use the beta.7 candidate only after its exact-commit release gate passes; see [beta.7 upgrade guide](SERVER2_BETA7_UPGRADE.md). The original notes below are historical.
+
 This procedure upgrades an existing `shopaware.innawareucp.com` beta.4 installation to beta.5. It preserves `.env`, users, customer groups, camera grants, encrypted camera credentials, incidents, observations, media, training data, enabled camera modes and TLS configuration. Startup performs an additive schema-6 migration that adds persisted per-camera mode settings. Existing cameras snapshot their effective beta.4 Shoplifting tuning (including a previously customized global risk or loitering threshold) and use beta.4 defaults for the newly exposed mode-specific controls, so the upgrade does not intentionally change their behavior.
 
 ## 1. Connect, inspect and back up

@@ -51,7 +51,7 @@ These values are tuning controls, not calibrated probabilities. Lowering thresho
 
 Vehicle detection for LPR and Vehicle break-in uses the standard COCO classes in `yolo26n.pt`. Keep `SHOPAWARE_ENABLE_SPECIALIZED_MODEL=false` when using those modes. A globally activated specialized Shoplifting detector may not contain vehicle classes, so ShopAware deliberately does not manufacture vehicle results from it.
 
-The included LPR path is a conservative CPU baseline, not a production ALPR guarantee. It may miss plates that are small, blurred, angled, overexposed, obscured, or outside its locator's geometry. Do not use OCR text as the sole basis for enforcement. Make/model inference is not implemented in beta.6; showing “not classified” is intentional.
+The included LPR path is a conservative CPU baseline, not a production ALPR guarantee. It may miss plates that are small, blurred, angled, overexposed, obscured, or outside its locator's geometry. Do not use OCR text as the sole basis for enforcement. Make/model inference is not implemented in beta.7; showing “not classified” is intentional.
 
 ## Face privacy and retention
 
