@@ -1,10 +1,13 @@
 import importlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import numpy as np
 from fastapi.testclient import TestClient
 
 from shopaware.mode_settings import parse_mode_settings
+from shopaware.mode_settings import CameraModeSettingsInput
 from test_api import api  # shared authenticated API fixture
 
 ORIGIN = "http://localhost:3000"
@@ -170,3 +173,69 @@ def test_reconnect_between_snapshots_uses_saved_tuning_on_first_frame(api, monke
     monkeypatch.setattr(backend, "model_obj", object())
     with camera["tracking"].lock, pytest.raises(StopBeforeInference):
         backend.process_camera(camera_id, camera, 100.0, True, frame)
+
+
+def test_concurrent_saves_serialize_database_and_live_tuning(api, monkeypatch):
+    admin, backend = api
+    importlib.import_module("beta5_backend")
+    from shopaware import mode_runtime
+    camera_id = admin.post("/cameras", json={
+        "name": "Concurrent save", "rtsp_url": "rtsp://synthetic.invalid/live", "enabled": False,
+    }).json()["camera"]["id"]
+    endpoint = next(route.endpoint for route in backend.app.routes
+                    if getattr(route, "path", "") == "/cameras/{camera_id}/mode-settings"
+                    and "PUT" in route.methods)
+    first_persisted, release_first, second_attempted = (threading.Event() for _ in range(3))
+    second_persisted = threading.Event()
+    actual_lock = threading.RLock()
+
+    class ObservedLock:
+        def __enter__(self):
+            if first_persisted.is_set():
+                second_attempted.set()
+            actual_lock.acquire()
+
+        def __exit__(self, *args):
+            actual_lock.release()
+
+    original = mode_runtime._persist_settings
+
+    def persist(core, camera_id, settings):
+        original(core, camera_id, settings)
+        if settings["shoplifting"]["risk_threshold"] == 71:
+            first_persisted.set()
+            assert release_first.wait(10)
+        else:
+            second_persisted.set()
+
+    monkeypatch.setattr(backend, "camera_lifecycle_lock", ObservedLock())
+    monkeypatch.setattr(mode_runtime, "_persist_settings", persist)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(endpoint, camera_id, CameraModeSettingsInput(shoplifting={"risk_threshold": 71}))
+        second = None
+        try:
+            assert first_persisted.wait(10)
+            second = pool.submit(endpoint, camera_id, CameraModeSettingsInput(shoplifting={"risk_threshold": 82}))
+            assert second_attempted.wait(10)
+            assert not second_persisted.is_set()
+        finally:
+            release_first.set()
+        first.result(timeout=10)
+        second.result(timeout=10)
+    runtime = backend.camera_manager.cameras[camera_id]
+    persisted = parse_mode_settings(backend.database.get_camera(camera_id)["mode_settings_json"])
+    assert persisted == runtime["mode_settings"]
+    assert runtime["risk"].threshold == 82
+
+
+def test_closed_camera_cannot_persist_settings(api):
+    admin, backend = api
+    importlib.import_module("beta5_backend")
+    camera_id = admin.post("/cameras", json={
+        "name": "Closed camera", "rtsp_url": "rtsp://synthetic.invalid/live", "enabled": False,
+    }).json()["camera"]["id"]
+    before = backend.database.get_camera(camera_id)["mode_settings_json"]
+    backend.camera_manager.cameras[camera_id]["tracking"].close()
+    response = admin.put(f"/cameras/{camera_id}/mode-settings", json={"shoplifting": {"risk_threshold": 81}})
+    assert response.status_code == 404
+    assert backend.database.get_camera(camera_id)["mode_settings_json"] == before

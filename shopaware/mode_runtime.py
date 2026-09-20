@@ -265,16 +265,21 @@ def install(core: Any) -> None:
             settings = parse_mode_settings(payload.model_dump())
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
-        try:
-            _persist_settings(core, camera_id, settings)
-        except KeyError:
-            raise HTTPException(404, "Camera not found") from None
-
-        with core.camera_manager.lock:
-            camera = core.camera_manager.cameras.get(camera_id)
-        if camera is not None:
-            context = camera["tracking"]
-            with context.lock:
+        # Match camera enable/delete/mode-change lock ordering. Persistence and
+        # live application must serialize together; otherwise two saves can
+        # commit A then B but apply B then A, diverging until restart.
+        with core.camera_lifecycle_lock:
+            with core.camera_manager.lock:
+                camera = core.camera_manager.cameras.get(camera_id)
+            if camera is None:
+                raise HTTPException(404, "Camera not found")
+            with camera["tracking"].lock:
+                if camera["tracking"].closed:
+                    raise HTTPException(404, "Camera was removed")
+                try:
+                    _persist_settings(core, camera_id, settings)
+                except KeyError:
+                    raise HTTPException(404, "Camera not found") from None
                 camera["mode_settings"] = settings
                 # Preserve cooldowns and track caps for unchanged modes.
                 configure_helpers(camera, settings)
