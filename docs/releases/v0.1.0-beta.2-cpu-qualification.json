@@ -1,0 +1,52 @@
+{
+  "cuda_available": false,
+  "models": [
+    {
+      "model": "models/yolo26n.pt",
+      "task": "detect",
+      "device": "cpu",
+      "inference_count": 5,
+      "warmup_seconds": 7.199306699999852,
+      "mean_latency_seconds": 0.3358063200000288,
+      "p95_latency_seconds": 0.3848416000000725,
+      "measured_fps": 2.9779070268835746,
+      "rss_before": 249040896,
+      "sampled_peak_rss": 385499136,
+      "cuda_peak_allocated": null
+    },
+    {
+      "model": "models/yolo26n-pose.pt",
+      "task": "pose",
+      "device": "cpu",
+      "inference_count": 5,
+      "warmup_seconds": 2.182798600000069,
+      "mean_latency_seconds": 0.592419979999977,
+      "p95_latency_seconds": 0.893378999999868,
+      "measured_fps": 1.6879916845479095,
+      "rss_before": 387465216,
+      "sampled_peak_rss": 400486400,
+      "cuda_peak_allocated": null,
+      "keypoints": 17,
+      "wrists": [
+        9,
+        10
+      ],
+      "hips": [
+        11,
+        12
+      ],
+      "adapter_tracking": "passed"
+    }
+  ],
+  "platform": "Windows x86_64 development host; not Server2",
+  "image": "Ultralytics bundled assets/bus.jpg",
+  "note": "Five timed inferences per model after three warmups; not a sustained load or channel-capacity test.",
+  "versions": {
+    "ultralytics": "8.4.150",
+    "torch": "2.14.0",
+    "torchvision": "0.29.0",
+    "opencv-python": "5.0.0.93",
+    "fastapi": "0.141.1",
+    "numpy": "2.3.5"
+  }
+}
