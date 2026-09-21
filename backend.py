@@ -513,6 +513,8 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
     """Called with this camera's context lock held through inference and events."""
     context = cam["tracking"]
     cap = cam["cap"]
+    settings = cam.get("mode_settings")
+    loitering_seconds = settings["shoplifting"]["loitering_seconds"] if settings is not None else LOITERING_THRESHOLD
     ret, frame, sequence, generation, captured_at = cap.snapshot()
     cam["last_sequence"] = sequence
     if not ret or frame is None:
@@ -661,7 +663,7 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                             state.zone_entries[zone.id] = now
                             zone_signals.append({'merchandise': 'merchandise_zone_entry',
                                 'checkout': 'checkout_zone_entry', 'exit': 'exit_zone_entry'}.get(zone.type, ''))
-                        elif now - state.zone_entries[zone.id] >= LOITERING_THRESHOLD:
+                        elif now - state.zone_entries[zone.id] >= loitering_seconds:
                             zone_signals.append('excessive_dwell')
                     if zone.enabled and zone.type in {'merchandise', 'restricted'}:
                         for wrist in keypoints[9:11]:
@@ -768,7 +770,7 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
                     entry_times: dict[int, float] = cam["roi_entry_times"]
                     entry_times.setdefault(int(track_id), now)
                     dwell = now - entry_times[int(track_id)]
-                    if dwell >= LOITERING_THRESHOLD:
+                    if dwell >= loitering_seconds:
                         cv2.putText(
                             frame,
                             f"DWELL {dwell:.1f}s",

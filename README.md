@@ -45,7 +45,7 @@ writers, provider-based SMTP, schema migrations, retention/quota management and
 editable runtime settings. See [deployment/setup and exact remaining limits](docs/DEPLOYMENT.md).
 Real cameras and Server2 capacity still require qualification. YOLO26 detection/pose CPU inference and tracking were checked on bundled sample imagery for this release.
 
-For Server2, use the complete [deployment guide](docs/SERVER2_DEPLOYMENT.md), [beta.8 upgrade procedure](docs/SERVER2_BETA8_UPGRADE.md), [camera-mode guide](docs/CAMERA_MODES.md), and [camera training instructions](docs/SERVER2_TRAINING.md).
+For Server2, use the complete [deployment guide](docs/SERVER2_DEPLOYMENT.md), [beta.9 upgrade procedure](docs/SERVER2_BETA9_UPGRADE.md), [camera-mode guide](docs/CAMERA_MODES.md), and [camera training instructions](docs/SERVER2_TRAINING.md).
 
 The dashboard includes **Training**, with a **Train with this camera** shortcut, and an administrator-only **Mode Settings** page for per-camera Shoplifting, Vehicle break-in, LPR and Face Capture tuning. Capture examples from a selected camera, draw object boxes, review labels and export a YOLO dataset. A separate command checks, trains and evaluates a new detector; activation remains explicit. See [the camera training guide](docs/TRAINING.md).
 

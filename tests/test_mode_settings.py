@@ -127,7 +127,7 @@ def test_persisted_mode_settings_use_schema_6_and_survive_database_reopen(tmp_pa
         conn.close()
 
 
-def test_configured_processor_scopes_shoplifting_loitering_and_restores_global():
+def test_configured_processor_keeps_camera_tuning_separate_from_global_defaults():
     settings = parse_mode_settings({"shoplifting": {"loitering_seconds": 27}})
 
     class DatabaseStub:
@@ -152,11 +152,11 @@ def test_configured_processor_scopes_shoplifting_loitering_and_restores_global()
     observed = []
 
     def original(*args):
-        observed.append(core.LOITERING_THRESHOLD)
+        observed.append((camera["mode_settings"]["shoplifting"]["loitering_seconds"], core.LOITERING_THRESHOLD))
         return "ok"
 
     assert configured_process_camera(core, original, "cam", camera, 1.0, True, None) == "ok"
-    assert observed == [27]
+    assert observed == [(27, 12.0)]
     assert core.LOITERING_THRESHOLD == 12.0
 
 

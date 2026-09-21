@@ -27,7 +27,7 @@ class RiskEngine:
 
     def observe(self, track_id: int, signals: list[str], now: float) -> dict | None:
         for key in list(self.tracks):
-            if now - self.tracks[key].last_activity > max(120, self.quiet_seconds):
+            if now - self.tracks[key].last_activity > max(120, self.quiet_seconds, self.window_seconds):
                 del self.tracks[key]
         state = self.tracks.setdefault(track_id, TrackContext())
         if signals:

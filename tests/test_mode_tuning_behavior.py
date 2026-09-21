@@ -162,7 +162,7 @@ def test_reconnect_generation_reapplies_saved_mode_helpers_before_processing():
         observed["lpr_confidence"] = camera["plate_reader"].min_ocr_confidence
         observed["face_max"] = camera["face_capture"].max_per_track
         observed["breakin_dwell"] = camera["break_in"].dwell_seconds
-        observed["loitering"] = core.LOITERING_THRESHOLD
+        observed["loitering"] = camera["mode_settings"]["shoplifting"]["loitering_seconds"]
         observed["generation"] = context.generation
         return "processed"
 

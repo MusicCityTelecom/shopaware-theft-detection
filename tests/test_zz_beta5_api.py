@@ -239,3 +239,66 @@ def test_closed_camera_cannot_persist_settings(api):
     response = admin.put(f"/cameras/{camera_id}/mode-settings", json={"shoplifting": {"risk_threshold": 81}})
     assert response.status_code == 404
     assert backend.database.get_camera(camera_id)["mode_settings_json"] == before
+
+
+@pytest.mark.parametrize("loitering,expected", [(5, True), (50, False)])
+def test_frame_processing_uses_camera_loitering_for_zone_signals_and_roi_label(api, monkeypatch, loitering, expected):
+    import torch
+    from ultralytics.engine.results import Results
+    from shopaware.zones import Zone
+
+    admin, backend = api
+    importlib.import_module("beta5_backend")
+    camera_id = admin.post("/cameras", json={
+        "name": "Local dwell", "rtsp_url": "rtsp://synthetic.invalid/live", "enabled": False,
+    }).json()["camera"]["id"]
+    settings = parse_mode_settings({"shoplifting": {"loitering_seconds": loitering, "risk_threshold": 5}})
+    assert admin.put(f"/cameras/{camera_id}/mode-settings", json=settings).status_code == 200
+    camera = backend.camera_manager.cameras[camera_id]
+    image = np.zeros((200, 200, 3), np.uint8)
+    monkeypatch.setattr(backend, "LOITERING_THRESHOLD", 100)
+
+    class Capture:
+        now = 100
+        def snapshot(self):
+            return True, image.copy(), 1, 1, self.now
+        def release(self):
+            pass
+
+    class Pose:
+        def predict(self, frame, **kwargs):
+            # A new camera created during inference must still see site defaults.
+            from shopaware.mode_runtime import _legacy_settings
+            assert _legacy_settings(backend)["shoplifting"]["loitering_seconds"] == 100
+            return [Results(frame, "synthetic", {0: "person"},
+                            boxes=torch.tensor([[10, 10, 60, 150, .9, 0]]),
+                            keypoints=torch.zeros((1, 17, 3)))]
+
+    class Objects:
+        names = {39: "bottle"}
+        def __call__(self, frame, **kwargs):
+            return [Results(frame, "synthetic", self.names, boxes=torch.empty((0, 6)))]
+
+    capture = Capture()
+    monkeypatch.setitem(camera, "cap", capture)
+    camera["zones"] = [Zone(id="parking", name="Parking", type="parking",
+                            points=[(0, 0), (1, 0), (1, 1), (0, 1)])]
+    camera["roi_points"] = [[0, 0], [199, 0], [199, 199], [0, 199]]
+    monkeypatch.setattr(backend, "model_pose", Pose())
+    monkeypatch.setattr(backend, "model_obj", Objects())
+    monkeypatch.setattr(backend, "model_is_specialized", False)
+    incidents, labels = [], []
+    monkeypatch.setattr(backend, "trigger_incident", lambda *args: incidents.append(args))
+    real_put_text = backend.cv2.putText
+    def put_text(frame, text, *args, **kwargs):
+        labels.append(text)
+        return real_put_text(frame, text, *args, **kwargs)
+    monkeypatch.setattr(backend.cv2, "putText", put_text)
+    with camera["tracking"].lock:
+        backend.process_camera(camera_id, camera, capture.now, True, image)
+        capture.now = 110
+        backend.process_camera(camera_id, camera, capture.now, True, image)
+    assert bool(incidents) is expected
+    assert any(label.startswith("DWELL ") for label in labels) is expected
+    if expected:
+        assert incidents[0][-1]["signals"] == ["excessive_dwell"]

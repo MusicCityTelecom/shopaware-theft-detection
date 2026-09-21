@@ -143,7 +143,10 @@ class PlateReader:
                 snapshot = vehicle_crop.copy()
                 cv2.rectangle(snapshot, (px, py), (px + pw, py + ph), (0, 220, 0), 2)
                 results.append(PlateObservation(plate, confidence, snapshot, color, color_confidence))
-        self.last_seen = {plate: at for plate, at in self.last_seen.items() if now - at < 3600}
+        # Retain the last observation for the entire configured suppression
+        # period, including settings longer than the old one-hour cleanup.
+        retention = max(3600, self.cooldown_seconds)
+        self.last_seen = {plate: at for plate, at in self.last_seen.items() if now - at < retention}
         return results
 
 
@@ -167,10 +170,14 @@ class FaceCapture:
         self.max_per_track = max_per_track
         self.min_quality = min_quality
         self.state: dict[str, tuple[float, int, float]] = {}
+        self._last_seen: dict[str, float] = {}
 
     def observe(self, frame: np.ndarray, people: list[tuple[int, np.ndarray]], generation: int,
                 now: float) -> list[FaceObservation]:
         found: list[FaceObservation] = []
+        active = {f"track-{generation}-{track_id}" for track_id, _ in people}
+        for subject in active.intersection(self.state):
+            self._last_seen[subject] = now
         for track_id, person in people:
             x1, y1, x2, y2 = [int(v) for v in person[:4]]
             x1, y1 = max(0, x1), max(0, y1)
@@ -195,8 +202,15 @@ class FaceCapture:
             if count and quality < max(self.min_quality, 0.20, best * 0.70):
                 continue
             self.state[subject] = (now, count + 1, max(best, quality))
+            self._last_seen[subject] = now
             found.append(FaceObservation(subject, min(0.99, 0.5 + quality / 2), crop.copy(), quality))
-        self.state = {key: value for key, value in self.state.items() if now - value[0] < 600}
+        # A visible person can remain on the same track after the capture cap is
+        # reached, or while their face is hidden/low quality. Keep that cap even
+        # when the last accepted face crop is old. Absent tracks still expire.
+        retention = max(600, self.cooldown_seconds)
+        self.state = {key: value for key, value in self.state.items()
+                      if now - self._last_seen.get(key, value[0]) < retention}
+        self._last_seen = {key: at for key, at in self._last_seen.items() if key in self.state}
         return found
 
 

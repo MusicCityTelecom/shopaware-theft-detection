@@ -170,15 +170,11 @@ def configured_process_camera(
     settings = _runtime_settings(core, camera_id, camera)
     _prepare_generation(camera, settings)
 
-    # The beta.4 monolith reads the loitering value from a module global. The
-    # inference loop is serial across cameras, so scope the global to this call
-    # and restore it immediately afterward.
-    previous_loitering = core.LOITERING_THRESHOLD
-    core.LOITERING_THRESHOLD = settings["shoplifting"]["loitering_seconds"]
+    # The backend reads loitering directly from this camera's settings. Never
+    # alter the global migration/new-camera default during inference.
     try:
         return original(camera_id, camera, now, run_obj, no_signal)
     finally:
-        core.LOITERING_THRESHOLD = previous_loitering
         # If the underlying processor observed an unexpected generation change
         # between snapshots, it may have recreated beta.4 defaults. Repair the
         # helper objects before the next frame.
