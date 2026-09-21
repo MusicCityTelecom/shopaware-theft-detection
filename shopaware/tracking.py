@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import itertools
 import threading
+import uuid
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -62,11 +63,15 @@ class CameraTrackingContext:
     generation: int = -1
     resolution: tuple[int, int] | None = None
     closed: bool = False
+    # ByteTrack IDs and ingest generations restart; persisted groups need a
+    # unique boundary for each uninterrupted tracker lifetime.
+    track_scope: str = field(default_factory=lambda: uuid.uuid4().hex)
 
-    def reset(self, generation: int, resolution: tuple[int, int]) -> None:
+    def reset(self, generation: int, resolution: tuple[int, int] | None) -> None:
         with self.lock:
             self.tracker = None
             self.people.clear()
+            self.track_scope = uuid.uuid4().hex
             self.generation = generation
             self.resolution = resolution
 

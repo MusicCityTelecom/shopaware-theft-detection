@@ -23,7 +23,7 @@ Multiple modes share a camera's decoded frames and YOLO inference, but LPR and F
 
 ## Per-camera mode settings
 
-Beta.6 persists a complete settings object independently for every camera. Saving settings applies them without a service restart. They are reloaded after process/container restart and re-applied when a camera stream reconnects or starts a new stream generation.
+ShopAware persists a complete settings object independently for every camera. Saving settings applies them without a service restart. They are reloaded after process/container restart and re-applied when a camera stream reconnects or starts a new stream generation.
 
 The default values preserve beta.4 behavior:
 
@@ -55,7 +55,7 @@ The included LPR path is a conservative CPU baseline, not a production ALPR guar
 
 ## Face privacy and retention
 
-Face Capture is anonymous detection, not facial recognition. Its grouping key is an ephemeral pose-track ID scoped to one camera stream generation. Reconnects and tracker resets start new groups. The system stores crops in the same bounded media area and applies the configured global retention period/quota.
+Face Capture is anonymous detection, not facial recognition. Its grouping key combines the camera, a unique tracking-session marker and the ephemeral pose-track ID. Reconnects, tracker resets, resolution changes and backend restarts start new groups. Changing tuning without resetting tracking preserves the group. Captures recorded before beta.11 lack a reliable continuity marker and are displayed individually; their original images and records remain available. The system stores crops in the same bounded media area and applies the configured global retention period/quota.
 
 Before enabling it, establish a legitimate purpose, signs/notice where required, access rules, a short retention period, and a process for access/deletion requests. Laws may treat face images as personal or biometric data even without identity matching. Do not use this mode to infer identity, protected traits, emotion, intent, or criminality.
 

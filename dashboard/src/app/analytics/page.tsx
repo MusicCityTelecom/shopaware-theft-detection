@@ -1,6 +1,7 @@
 "use client";
 
 import { apiBase, apiFetch as fetch } from "@/lib/api";
+import { groupFaceTracks } from "@/lib/face-track-groups";
 import { useEffect, useMemo, useState } from "react";
 import { CarFront, RefreshCw, ScanFace, ScanSearch } from "lucide-react";
 
@@ -17,6 +18,7 @@ type Observation = {
   confidence: number;
   snapshot_path?: string | null;
   metadata?: {
+    track_scope?: string;
     quality?: number;
     vehicle_color?: string;
     vehicle_color_confidence?: number;
@@ -52,11 +54,7 @@ export default function AnalyticsPage() {
     () => observations.filter(item => (mode === "all" || item.mode === mode) && (!group || (item.group_id || "ungrouped") === group)),
     [observations, mode, group],
   );
-  const faceGroups = useMemo(() => {
-    const grouped = new Map<string, Observation[]>();
-    visible.filter(item => item.mode === "face_capture").forEach(item => grouped.set(item.subject_key, [...(grouped.get(item.subject_key) || []), item]));
-    return Array.from(grouped.values());
-  }, [visible]);
+  const faceGroups = useMemo(() => groupFaceTracks(visible), [visible]);
   const plates = visible.filter(item => item.mode === "lpr");
 
   return (
@@ -94,7 +92,8 @@ export default function AnalyticsPage() {
 
       {(mode === "all" || mode === "face_capture") && <section>
         <div className="flex gap-2 items-center mb-3"><ScanFace className="w-5 h-5 text-brand" /><h3 className="text-xl font-semibold">Anonymous face tracks</h3><span className="badge">{faceGroups.length}</span></div>
-        {faceGroups.length === 0 ? <Empty text="No face captures match this filter." /> : <div className="space-y-4">{faceGroups.map(items => <article key={items[0].subject_key} className="glass-panel p-4">
+        <p className="text-sm text-foreground/60 mb-3">Older captures are shown separately because their track continuity cannot be verified.</p>
+        {faceGroups.length === 0 ? <Empty text="No face captures match this filter." /> : <div className="space-y-4">{faceGroups.map(items => <article key={items[0].id} className="glass-panel p-4">
           <div className="flex flex-wrap justify-between gap-2 mb-3"><div><div className="font-semibold">Anonymous camera track</div><div className="text-sm">{items[0].camera_name} · {items[0].group_name || "Ungrouped"}</div></div><div className="text-right"><span className="badge">{items.length} capture{items.length === 1 ? "" : "s"}</span><div className="text-xs text-foreground/45 mt-1">{new Date(items[0].observed_at).toLocaleString()}</div></div></div>
           <div className="flex gap-3 overflow-x-auto pb-1">{items.map(item => <div className="shrink-0 w-36" key={item.id}><Snapshot item={item} alt="Anonymous face capture" square /><div className="text-xs text-center mt-1 text-foreground/50">quality {Math.round((item.metadata?.quality || 0) * 100)}%</div></div>)}</div>
         </article>)}</div>}
