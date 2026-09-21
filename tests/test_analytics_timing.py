@@ -4,8 +4,6 @@ import numpy as np
 import pytest
 
 from shopaware.analytics import FaceCapture, PlateReader
-from shopaware.mode_runtime import _legacy_settings, configured_process_camera
-from shopaware.mode_settings import parse_mode_settings
 from shopaware.risk import RiskEngine
 
 
@@ -68,15 +66,3 @@ def test_risk_signal_lifetime_respects_full_scoring_window(elapsed, expected):
     assert (result is not None) is expected
     if expected:
         assert result["risk_score"] == .25
-
-
-def test_inference_does_not_change_defaults_seen_by_new_cameras():
-    settings = parse_mode_settings({"shoplifting": {"loitering_seconds": 27}})
-    core = SimpleNamespace(LOITERING_THRESHOLD=12)
-    camera = {"mode_settings": settings}
-
-    def during_inference(*args):
-        assert _legacy_settings(core)["shoplifting"]["loitering_seconds"] == 12
-        assert camera["mode_settings"]["shoplifting"]["loitering_seconds"] == 27
-
-    configured_process_camera(core, during_inference, "camera", camera, 0, True, None)

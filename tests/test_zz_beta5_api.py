@@ -132,7 +132,7 @@ def test_saving_mode_preserves_other_modes_live_state(api, mode, field, value, c
     assert parse_mode_settings(backend.database.get_camera(camera_id)["mode_settings_json"]) == settings
 
 
-def test_reconnect_between_snapshots_uses_saved_tuning_on_first_frame(api, monkeypatch):
+def test_reconnect_applies_saved_tuning_before_first_frame(api, monkeypatch):
     admin, backend = api
     importlib.import_module("beta5_backend")
     camera_id = admin.post("/cameras", json={
@@ -147,7 +147,11 @@ def test_reconnect_between_snapshots_uses_saved_tuning_on_first_frame(api, monke
     assert admin.put(f"/cameras/{camera_id}/mode-settings", json=settings).status_code == 200
     camera = backend.camera_manager.cameras[camera_id]
     frame = np.zeros((64, 96, 3), dtype=np.uint8)
-    generations = iter([10, 11])
+    camera["tracking"].reset(10, frame.shape[:2])
+    camera["roi_entry_times"] = {1: 90.0}
+    camera["last_objects"] = [np.array([1, 1, 2, 2])]
+    camera["last_detections"] = [{"class_id": 2}]
+    generations = iter([11])
 
     class Capture:
         def snapshot(self):
@@ -161,6 +165,9 @@ def test_reconnect_between_snapshots_uses_saved_tuning_on_first_frame(api, monke
 
     class Pose:
         def predict(self, *args, **kwargs):
+            assert camera["roi_entry_times"] == {}
+            assert camera["last_objects"] == []
+            assert camera["last_detections"] == []
             assert camera["tracking"].generation == 11
             assert camera["risk"].threshold == 81
             assert camera["plate_reader"].min_ocr_confidence == .71
@@ -178,7 +185,6 @@ def test_reconnect_between_snapshots_uses_saved_tuning_on_first_frame(api, monke
 def test_concurrent_saves_serialize_database_and_live_tuning(api, monkeypatch):
     admin, backend = api
     importlib.import_module("beta5_backend")
-    from shopaware import mode_runtime
     camera_id = admin.post("/cameras", json={
         "name": "Concurrent save", "rtsp_url": "rtsp://synthetic.invalid/live", "enabled": False,
     }).json()["camera"]["id"]
@@ -198,10 +204,10 @@ def test_concurrent_saves_serialize_database_and_live_tuning(api, monkeypatch):
         def __exit__(self, *args):
             actual_lock.release()
 
-    original = mode_runtime._persist_settings
+    original = backend.persist_mode_settings
 
-    def persist(core, camera_id, settings):
-        original(core, camera_id, settings)
+    def persist(database, camera_id, settings):
+        original(database, camera_id, settings)
         if settings["shoplifting"]["risk_threshold"] == 71:
             first_persisted.set()
             assert release_first.wait(10)
@@ -209,7 +215,7 @@ def test_concurrent_saves_serialize_database_and_live_tuning(api, monkeypatch):
             second_persisted.set()
 
     monkeypatch.setattr(backend, "camera_lifecycle_lock", ObservedLock())
-    monkeypatch.setattr(mode_runtime, "_persist_settings", persist)
+    monkeypatch.setattr(backend, "persist_mode_settings", persist)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(endpoint, camera_id, CameraModeSettingsInput(shoplifting={"risk_threshold": 71}))
         second = None
@@ -268,8 +274,8 @@ def test_frame_processing_uses_camera_loitering_for_zone_signals_and_roi_label(a
     class Pose:
         def predict(self, frame, **kwargs):
             # A new camera created during inference must still see site defaults.
-            from shopaware.mode_runtime import _legacy_settings
-            assert _legacy_settings(backend)["shoplifting"]["loitering_seconds"] == 100
+            from shopaware.mode_runtime import legacy_mode_settings
+            assert legacy_mode_settings(backend.LOITERING_THRESHOLD)["shoplifting"]["loitering_seconds"] == 100
             return [Results(frame, "synthetic", {0: "person"},
                             boxes=torch.tensor([[10, 10, 60, 150, .9, 0]]),
                             keypoints=torch.zeros((1, 17, 3)))]

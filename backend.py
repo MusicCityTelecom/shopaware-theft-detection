@@ -32,6 +32,8 @@ from pydantic import BaseModel, Field, model_validator
 from ultralytics import YOLO
 from shopaware import __version__
 from shopaware.models import model_path
+from shopaware.mode_runtime import configure_helpers, load_camera_settings, persist_mode_settings, settings_from_row
+from shopaware.mode_settings import CameraModeSettingsInput, parse_mode_settings
 from shopaware.media import media_writer
 from shopaware.analytics import (
     CAMERA_MODES,
@@ -191,6 +193,7 @@ class CameraManager:
         )
 
     def _row_to_runtime(self, row: Any) -> dict[str, Any]:
+        mode_settings = load_camera_settings(database, row["id"], LOITERING_THRESHOLD)
         password = secrets.decrypt(row["password_enc"])
         runtime_url = build_runtime_url(row["rtsp_url"], row["username"], password)
         recorder = self._make_recorder(row["id"])
@@ -198,7 +201,7 @@ class CameraManager:
             modes = normalize_modes(json.loads(row["modes_json"] or "[]"))
         except (KeyError, TypeError, json.JSONDecodeError, ValueError):
             modes = list(DEFAULT_CAMERA_MODES)
-        return {
+        runtime = {
             "id": row["id"],
             "group_id": row['group_id'],
             "access_epoch": row['access_epoch'],
@@ -209,11 +212,11 @@ class CameraManager:
             "roi_points": json.loads(row["roi_json"] or "[]"),
             "enabled": bool(row["enabled"]),
             "modes": modes,
-            "cap": ThreadedCamera(runtime_url, on_frame=recorder.push) if row["enabled"] else None,
+            "mode_settings": mode_settings,
+            "cap": None,
             "runtime_url": runtime_url,
             "recorder": recorder,
             "tracking": CameraTrackingContext(),
-            "risk": RiskEngine(threshold=float(os.getenv("SHOPAWARE_RISK_THRESHOLD", "65"))),
             "zones": load_zones(row["id"]),
             "last_inference_at": 0.0,
             "last_sequence": -1,
@@ -221,11 +224,13 @@ class CameraManager:
             "last_alert_time": 0.0,
             "last_objects": [],
             "roi_entry_times": {},
-            "plate_reader": PlateReader(),
-            "face_capture": FaceCapture(),
-            "break_in": VehicleBreakInDetector(),
             "last_detections": [],
         }
+
+        configure_helpers(runtime, mode_settings, force=True)
+        if row["enabled"]:
+            runtime["cap"] = ThreadedCamera(runtime_url, on_frame=recorder.push)
+        return runtime
 
     def load_cameras(self) -> None:
         with self.lock:
@@ -529,9 +534,7 @@ def process_camera(camera_id: str, cam: dict[str, Any], now: float,
             cam["last_objects"] = []
             cam["last_detections"] = []
             if cam.get("mode_settings") is not None:
-                # The stream can reconnect after the mode wrapper's snapshot.
-                # Apply saved tuning to this frame too, before inference/events.
-                from shopaware.mode_runtime import configure_helpers
+                # Reset tracking and apply saved tuning before processing this frame.
                 configure_helpers(cam, cam["mode_settings"], force=True)
             else:
                 cam["risk"] = RiskEngine(threshold=float(os.getenv("SHOPAWARE_RISK_THRESHOLD", "65")))
@@ -1264,18 +1267,52 @@ def set_camera_modes(camera_id: str, payload: CameraModesInput):
             camera = camera_manager.cameras.get(camera_id)
             if camera is None:
                 raise HTTPException(404, 'Camera not found')
-        plate_reader, face_capture, break_in = PlateReader(), FaceCapture(), VehicleBreakInDetector()
         context = camera['tracking']
         with context.lock:
             if not database.set_camera_modes(camera_id, payload.modes):
                 raise HTTPException(404, 'Camera not found')
             camera['modes'] = payload.modes
-            camera['risk'] = RiskEngine(threshold=float(os.getenv('SHOPAWARE_RISK_THRESHOLD', '65')))
-            camera['plate_reader'] = plate_reader
-            camera['face_capture'] = face_capture
-            camera['break_in'] = break_in
+            configure_helpers(camera, camera['mode_settings'], force=True)
             context.reset(-1, None)
     return {'modes': payload.modes}
+
+
+@app.get("/cameras/{camera_id}/mode-settings")
+def get_camera_mode_settings(camera_id: str):
+    row = database.get_camera(camera_id)
+    if row is None:
+        raise HTTPException(404, "Camera not found")
+    try:
+        return settings_from_row(row, LOITERING_THRESHOLD)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(500, "Camera mode settings are invalid") from exc
+
+
+@app.put("/cameras/{camera_id}/mode-settings")
+def put_camera_mode_settings(camera_id: str, payload: CameraModeSettingsInput):
+    try:
+        settings = parse_mode_settings(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    # Match camera enable/delete/mode-change lock ordering. Persistence and
+    # live application must serialize together; otherwise two saves can
+    # commit A then B but apply B then A, diverging until restart.
+    with camera_lifecycle_lock:
+        with camera_manager.lock:
+            camera = camera_manager.cameras.get(camera_id)
+        if camera is None:
+            raise HTTPException(404, "Camera not found")
+        with camera["tracking"].lock:
+            if camera["tracking"].closed:
+                raise HTTPException(404, "Camera was removed")
+            try:
+                persist_mode_settings(database, camera_id, settings)
+            except KeyError:
+                raise HTTPException(404, "Camera not found") from None
+            camera["mode_settings"] = settings
+            # Preserve cooldowns and track caps for unchanged modes.
+            configure_helpers(camera, settings)
+    return {"settings": settings, "restart_required": False}
 
 
 def training_frame(camera_id: str):

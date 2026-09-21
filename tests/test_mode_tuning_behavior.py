@@ -1,13 +1,12 @@
-import json
 import sys
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 
 import numpy as np
 
 from shopaware import migrations
 from shopaware.analytics import FaceCapture, PlateReader
 from shopaware.db import Database
-from shopaware.mode_runtime import configure_helpers, configured_process_camera
+from shopaware.mode_runtime import configure_helpers
 from shopaware.mode_settings import parse_mode_settings
 
 
@@ -114,69 +113,3 @@ def test_shoplifting_threshold_window_and_cooldown_are_independent_camera_settin
     # The prior signals expire outside this camera's two-second scoring window.
     assert risk.observe(2, ["exit_zone_entry"], 10) is None
     assert risk.observe(2, ["merchandise_interaction"], 13) is None
-
-
-def test_reconnect_generation_reapplies_saved_mode_helpers_before_processing():
-    settings = parse_mode_settings({
-        "shoplifting": {"risk_threshold": 77, "loitering_seconds": 23},
-        "lpr": {"min_ocr_confidence": .66},
-        "face_capture": {"max_images_per_track": 2},
-        "vehicle_break_in": {"dwell_seconds": 25},
-    })
-
-    class DatabaseStub:
-        def get_camera(self, camera_id):
-            return {"mode_settings_json": json.dumps(settings)}
-
-    class Context:
-        generation = 1
-        resolution = (20, 20)
-        reset_calls = 0
-
-        def reset(self, generation, resolution):
-            self.generation = generation
-            self.resolution = resolution
-            self.reset_calls += 1
-
-    class Capture:
-        def snapshot(self):
-            return True, np.zeros((10, 10, 3), dtype=np.uint8), 1, 2, 100.0
-
-    context = Context()
-    camera = {
-        "tracking": context,
-        "cap": Capture(),
-        "roi_entry_times": {1: 1.0},
-        "last_objects": [np.array([1, 1, 2, 2])],
-        "last_detections": [{"class_id": 2}],
-        "mode_settings": settings,
-    }
-    core = SimpleNamespace(
-        database=DatabaseStub(), LOITERING_THRESHOLD=12.0,
-        logger=SimpleNamespace(warning=lambda *args: None),
-    )
-    observed = {}
-
-    def original(*args):
-        observed["risk_threshold"] = camera["risk"].threshold
-        observed["lpr_confidence"] = camera["plate_reader"].min_ocr_confidence
-        observed["face_max"] = camera["face_capture"].max_per_track
-        observed["breakin_dwell"] = camera["break_in"].dwell_seconds
-        observed["loitering"] = camera["mode_settings"]["shoplifting"]["loitering_seconds"]
-        observed["generation"] = context.generation
-        return "processed"
-
-    assert configured_process_camera(core, original, "cam", camera, 100, True, None) == "processed"
-    assert context.reset_calls == 1
-    assert camera["roi_entry_times"] == {}
-    assert camera["last_objects"] == []
-    assert camera["last_detections"] == []
-    assert observed == {
-        "risk_threshold": 77,
-        "lpr_confidence": .66,
-        "face_max": 2,
-        "breakin_dwell": 25,
-        "loitering": 23,
-        "generation": 2,
-    }
-    assert core.LOITERING_THRESHOLD == 12.0

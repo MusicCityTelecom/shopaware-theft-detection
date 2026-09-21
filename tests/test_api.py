@@ -73,9 +73,9 @@ def test_camera_modes_default_to_shoplifting_and_support_multiple_modes(api):
 def test_failed_camera_runtime_initialization_rolls_back_database_row(api, monkeypatch):
     client, backend = api
     class BrokenAnalytics:
-        def __init__(self):
+        def __init__(self, **kwargs):
             raise RuntimeError('Synthetic analytics initialization failure')
-    monkeypatch.setattr(backend, 'PlateReader', BrokenAnalytics)
+    monkeypatch.setattr('shopaware.mode_runtime.PlateReader', BrokenAnalytics)
     response = client.post('/cameras', json=dict(name='Rollback', rtsp_url='rtsp://host/live', enabled=False))
     assert response.status_code == 400
     assert backend.database.list_cameras() == []

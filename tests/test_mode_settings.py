@@ -1,17 +1,13 @@
-import json
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
 from shopaware.analytics import FaceCapture, PlateReader, VehicleBreakInDetector
 from shopaware.db import Database
 from shopaware.mode_runtime import (
-    _legacy_settings,
-    _persist_settings,
-    _snapshot_empty_settings,
+    legacy_mode_settings,
+    persist_mode_settings,
+    load_camera_settings,
     configure_helpers,
-    configured_process_camera,
 )
 from shopaware.mode_settings import CameraModeSettingsInput, parse_mode_settings
 from shopaware.risk import RiskEngine
@@ -38,18 +34,17 @@ def test_migration_snapshots_effective_beta4_global_shoplifting_tuning(tmp_path,
         camera_id="cam", name="Legacy", rtsp_url="rtsp://host/live", username="",
         password_enc="", enabled=False,
     )
-    core = SimpleNamespace(database=db, LOITERING_THRESHOLD=19.5)
-    effective = _legacy_settings(core)
+    effective = legacy_mode_settings(19.5)
     assert effective["shoplifting"]["risk_threshold"] == 82
     assert effective["shoplifting"]["loitering_seconds"] == 19.5
-    snapshotted = _snapshot_empty_settings(core, "cam")
+    snapshotted = load_camera_settings(db, "cam", 19.5)
     assert snapshotted == effective
     row = db.get_camera("cam")
     assert row is not None
     assert parse_mode_settings(row["mode_settings_json"]) == effective
     # Later global changes must not retroactively alter this camera.
     monkeypatch.setenv("SHOPAWARE_RISK_THRESHOLD", "40")
-    core.LOITERING_THRESHOLD = 4
+    assert load_camera_settings(db, "cam", 4) == effective
     assert parse_mode_settings(db.get_camera("cam")["mode_settings_json"]) == effective
 
 
@@ -113,9 +108,8 @@ def test_persisted_mode_settings_use_schema_6_and_survive_database_reopen(tmp_pa
         camera_id="cam", name="Parking", rtsp_url="rtsp://host/live", username="",
         password_enc="", enabled=False,
     )
-    core = SimpleNamespace(database=db)
     settings = parse_mode_settings({"lpr": {"min_ocr_confidence": .61}})
-    _persist_settings(core, "cam", settings)
+    persist_mode_settings(db, "cam", settings)
     reopened = Database(tmp_path / "app.db")
     row = reopened.get_camera("cam")
     assert row is not None
@@ -125,39 +119,6 @@ def test_persisted_mode_settings_use_schema_6_and_survive_database_reopen(tmp_pa
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
     finally:
         conn.close()
-
-
-def test_configured_processor_keeps_camera_tuning_separate_from_global_defaults():
-    settings = parse_mode_settings({"shoplifting": {"loitering_seconds": 27}})
-
-    class DatabaseStub:
-        def get_camera(self, camera_id):
-            return {"mode_settings_json": json.dumps(settings)}
-
-    class Context:
-        generation = 1
-        resolution = (10, 10)
-        def reset(self, generation, resolution):
-            self.generation, self.resolution = generation, resolution
-
-    class Capture:
-        def snapshot(self):
-            return True, np.zeros((10, 10, 3), dtype=np.uint8), 1, 1, 1.0
-
-    core = SimpleNamespace(database=DatabaseStub(), LOITERING_THRESHOLD=12.0, logger=SimpleNamespace(warning=lambda *args: None))
-    camera = {
-        "tracking": Context(), "cap": Capture(), "roi_entry_times": {}, "last_objects": [],
-        "last_detections": [], "mode_settings": settings,
-    }
-    observed = []
-
-    def original(*args):
-        observed.append((camera["mode_settings"]["shoplifting"]["loitering_seconds"], core.LOITERING_THRESHOLD))
-        return "ok"
-
-    assert configured_process_camera(core, original, "cam", camera, 1.0, True, None) == "ok"
-    assert observed == [(27, 12.0)]
-    assert core.LOITERING_THRESHOLD == 12.0
 
 
 def test_pydantic_payload_has_no_unbounded_extra_fields():
