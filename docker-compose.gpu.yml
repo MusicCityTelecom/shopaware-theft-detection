@@ -1,0 +1,7 @@
+services:
+  shopaware:
+    build:
+      context: .
+      args:
+        TORCH_INDEX_URL: ${SHOPAWARE_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    gpus: all
